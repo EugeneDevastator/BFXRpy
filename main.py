@@ -10,10 +10,9 @@ from generator import generate_wave, SAMPLE_RATE
 
 SCREEN_W  = 1920
 SCREEN_H  = 1080
-FONT_SIZE = 42   # 32 * 1.3 ≈ 42
+FONT_SIZE = 42
 CHUNK     = 4096
 
-# Parameter group separators: (label, start_index, end_index_exclusive)
 PARAM_GROUPS = [
     ("Wave",        0,  2),
     ("Envelope",    2,  6),
@@ -34,32 +33,36 @@ def draw_panel(x, y, w, h, params, label):
     rl.draw_rectangle_lines(x, y, w, h, rl.LIGHTGRAY)
     rl.draw_text(label, x + 10, y + 8, FONT_SIZE, rl.WHITE)
 
-    sx    = x + 10
-    sw    = w - 140
-    row_h = (h - 50) // NUM_PARAMS
-    by    = y + 46
+    lbl_font  = FONT_SIZE - 18
+    val_font  = FONT_SIZE - 16
+    val_w     = 52   # fixed width reserved for value text on right
+    pad_left  = x + 10
+    row_h     = (h - 50) // NUM_PARAMS
+    by        = y + 46
 
-    # build a set of indices that start a new group (except first)
     group_starts = set(g[1] for g in PARAM_GROUPS if g[1] > 0)
 
+    # pre-measure max label width so sliders align per-panel
+    max_lbl_w = max(rl.measure_text(PARAM_NAMES[i], lbl_font) for i in range(NUM_PARAMS))
+    lbl_gap   = 6
+    sx        = pad_left + max_lbl_w + lbl_gap
+    sw        = (x + w) - sx - val_w - 14
+
     for i in range(NUM_PARAMS):
-        # separator line before group start
         if i in group_starts:
             sep_y = by + i * row_h - 2
-            rl.draw_line(sx, sep_y, sx + sw + 120, sep_y, rl.Color(80, 80, 80, 255))
+            rl.draw_line(pad_left, sep_y, pad_left + max_lbl_w + lbl_gap + sw + val_w + 8, sep_y, rl.Color(80, 80, 80, 255))
 
         sy      = by + i * row_h
         track_y = sy + row_h // 2
 
-        rl.draw_text(PARAM_NAMES[i], sx, sy, FONT_SIZE - 18, rl.GRAY)
+        rl.draw_text(PARAM_NAMES[i], pad_left, sy, lbl_font, rl.GRAY)
 
-        # filled rect slider
         bar_h  = 8
         bar_y  = track_y - bar_h // 2
         filled = int(params[i] * sw)
         rl.draw_rectangle(sx, bar_y, sw, bar_h, rl.DARKGRAY)
         rl.draw_rectangle(sx, bar_y, filled, bar_h, rl.SKYBLUE)
-        # knob as bold rect
         knob_w = 6
         knob_h = 18
         knob_x = sx + filled - knob_w // 2
@@ -71,19 +74,23 @@ def draw_panel(x, y, w, h, params, label):
             val_str = WAVE_NAMES[wt]
         else:
             val_str = f"{params[i]:.2f}"
-        rl.draw_text(val_str, sx + sw + 6, sy, FONT_SIZE - 16, rl.WHITE)
+        rl.draw_text(val_str, sx + sw + 6, sy, val_font, rl.WHITE)
 
     return sx, sw, by, row_h
 
 
 def handle_slider_input(mx, my, sx, sw, by, row_h, params):
-    if not rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT):
-        return
+    """Returns True if a slider was released this frame (mouse up after drag)."""
+    released = False
     for i in range(NUM_PARAMS):
         track_y = by + i * row_h + row_h // 2
         if abs(my - track_y) < 14 and sx <= mx <= sx + sw:
-            t = (mx - sx) / sw
-            params[i] = max(0.0, min(1.0, t))
+            if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                t = (mx - sx) / sw
+                params[i] = max(0.0, min(1.0, t))
+            if rl.is_mouse_button_released(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                released = True
+    return released
 
 
 def draw_button(x, y, w, h, label, color):
@@ -92,8 +99,9 @@ def draw_button(x, y, w, h, label, color):
     col     = rl.color_brightness(color, 0.3) if hovered else color
     rl.draw_rectangle(x, y, w, h, col)
     rl.draw_rectangle_lines(x, y, w, h, rl.WHITE)
-    tw = rl.measure_text(label, FONT_SIZE - 4)
-    rl.draw_text(label, x + (w - tw) // 2, y + (h - (FONT_SIZE - 4)) // 2, FONT_SIZE - 4, rl.WHITE)
+    fs = FONT_SIZE - 8
+    tw = rl.measure_text(label, fs)
+    rl.draw_text(label, x + (w - tw) // 2, y + (h - fs) // 2, fs, rl.WHITE)
     return hovered and rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT)
 
 
@@ -110,19 +118,21 @@ def draw_checkbox(x, y, size, label, checked):
 
 
 def draw_hslider(x, y, w, h, val, label):
-    """Horizontal filled-rect slider, returns new value."""
-    mx, my  = rl.get_mouse_x(), rl.get_mouse_y()
+    mx, my = rl.get_mouse_x(), rl.get_mouse_y()
+    lw     = rl.measure_text(label, FONT_SIZE - 10)
+    sx     = x + lw + 8
+    sw     = w - lw - 8
+    bar_y  = y + (FONT_SIZE - 10 - h) // 2 + (FONT_SIZE - 10) // 2
     rl.draw_text(label, x, y, FONT_SIZE - 10, rl.GRAY)
-    bar_y = y + FONT_SIZE - 6
-    filled = int(val * w)
-    rl.draw_rectangle(x, bar_y, w, h, rl.DARKGRAY)
-    rl.draw_rectangle(x, bar_y, filled, h, rl.Color(200, 160, 40, 255))
+    filled = int(val * sw)
+    rl.draw_rectangle(sx, bar_y, sw, h, rl.DARKGRAY)
+    rl.draw_rectangle(sx, bar_y, filled, h, rl.Color(200, 160, 40, 255))
     knob_w = 6
-    rl.draw_rectangle(x + filled - knob_w // 2, bar_y - 4, knob_w, h + 8, rl.WHITE)
-    rl.draw_text(f"{val:.2f}", x + w + 6, bar_y, FONT_SIZE - 14, rl.WHITE)
+    rl.draw_rectangle(sx + filled - knob_w // 2, bar_y - 4, knob_w, h + 8, rl.WHITE)
+    rl.draw_text(f"{val:.2f}", sx + sw + 6, bar_y, FONT_SIZE - 14, rl.WHITE)
     if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT):
-        if abs(my - (bar_y + h // 2)) < 20 and x <= mx <= x + w:
-            val = max(0.0, min(1.0, (mx - x) / w))
+        if abs(my - (bar_y + h // 2)) < 20 and sx <= mx <= sx + sw:
+            val = max(0.0, min(1.0, (mx - sx) / sw))
     return val
 
 
@@ -138,10 +148,10 @@ class Player:
 
     def play(self, pcm):
         self._stop()
-        self.stream  = rl.load_audio_stream(SAMPLE_RATE, 16, 1)
+        self.stream = rl.load_audio_stream(SAMPLE_RATE, 16, 1)
         rl.set_audio_stream_volume(self.stream, self.volume)
-        self.pcm     = pcm
-        self.cursor  = 0
+        self.pcm    = pcm
+        self.cursor = 0
         self.playing = True
         self._feed()
         rl.play_audio_stream(self.stream)
@@ -219,12 +229,12 @@ def main():
     params_r = make_params()
     params_r[6] = 0.5
 
-    blend_t       = 0.5
+    blend_t        = 0.5
     blend_dragging = False
-    player        = Player()
-    gen           = GenJob()
-    play_on_gen   = False
-    global_volume = 1.0
+    player         = Player()
+    gen            = GenJob()
+    play_on_gen    = False
+    global_volume  = 1.0
 
     PANEL_W  = 740
     PANEL_H  = SCREEN_H - 60
@@ -234,22 +244,37 @@ def main():
     CENTER_X = LEFT_X + PANEL_W + 10
     CENTER_W = RIGHT_X - CENTER_X - 10
 
-    RAND_COLOR = rl.Color(120, 60, 160, 255)
-    BTN_H      = 48
-    BTN_W      = CENTER_W - 20
+    COLOR_A    = rl.Color(40,  80, 160, 255)
+    COLOR_B    = rl.Color(40, 130,  60, 255)
+    COLOR_RAND = rl.Color(120, 60, 160, 255)
+    COLOR_COPY = rl.Color(80,  80,  80, 255)
+    COLOR_XFER = rl.Color(160, 80,  20, 255)
+
+    # 3-column layout inside center panel
+    # col1: A buttons, col2: blend slider, col3: B buttons
+    BTN_H    = 52
+    BTN_GAP  = 10
+    cx       = CENTER_X
+    cw       = CENTER_W
+
+    COL_BTN_W  = (cw - 20) * 2 // 5   # ~40% each side
+    COL_BLEND_W = cw - 2 * COL_BTN_W - 20
+    COL1_X   = cx + 4
+    COL2_X   = COL1_X + COL_BTN_W + 6
+    COL3_X   = COL2_X + COL_BLEND_W + 6
+
+    TOP_Y    = PANEL_Y + 10
 
     while not rl.window_should_close():
         player.update()
 
         pcm = gen.poll()
-        if pcm is not None:
-            if play_on_gen:
-                player.play(pcm)
+        if pcm is not None and play_on_gen:
+            player.play(pcm)
 
         mx = rl.get_mouse_x()
         my = rl.get_mouse_y()
 
-        # blend dragger release → autoplay blend
         was_dragging = blend_dragging
 
         rl.begin_drawing()
@@ -258,75 +283,89 @@ def main():
         sx_l, sw_l, by_l, rh_l = draw_panel(LEFT_X,  PANEL_Y, PANEL_W, PANEL_H, params_l, "PRESET A")
         sx_r, sw_r, by_r, rh_r = draw_panel(RIGHT_X, PANEL_Y, PANEL_W, PANEL_H, params_r, "PRESET B")
 
-        handle_slider_input(mx, my, sx_l, sw_l, by_l, rh_l, params_l)
-        handle_slider_input(mx, my, sx_r, sw_r, by_r, rh_r, params_r)
+        rel_l = handle_slider_input(mx, my, sx_l, sw_l, by_l, rh_l, params_l)
+        rel_r = handle_slider_input(mx, my, sx_r, sw_r, by_r, rh_r, params_r)
 
-        cx = CENTER_X
-        cw = CENTER_W
+        if play_on_gen:
+            if rel_l:
+                gen.start(params_l, "A")
+            if rel_r:
+                gen.start(params_r, "B")
 
-        lbl = "BLEND"
-        rl.draw_text(lbl, cx + (cw - rl.measure_text(lbl, FONT_SIZE)) // 2, PANEL_Y, FONT_SIZE, rl.WHITE)
+        # ── Column 1: A buttons ──
+        row = 0
+        def btn_y(r): return TOP_Y + r * (BTN_H + BTN_GAP)
 
-        bt_x  = cx + cw // 2
-        bt_y1 = PANEL_Y + 44
-        bt_y2 = PANEL_Y + 300
-        bt_h  = bt_y2 - bt_y1
+        if draw_button(COL1_X, btn_y(0), COL_BTN_W, BTN_H, "PLAY A", COLOR_A):
+            gen.start(params_l, "A")
+        if draw_button(COL1_X, btn_y(1), COL_BTN_W, BTN_H, "A< BLEND", COLOR_XFER):
+            blended = blend_params(params_l, params_r, blend_t)
+            for i in range(NUM_PARAMS): params_l[i] = blended[i]
+            if play_on_gen: gen.start(params_l, "A")
+        if draw_button(COL1_X, btn_y(2), COL_BTN_W, BTN_H, "A< RND", COLOR_RAND):
+            randomize_params(params_l)
+            if play_on_gen: gen.start(params_l, "A")
+        if draw_button(COL1_X, btn_y(3), COL_BTN_W, BTN_H, "A< B", COLOR_COPY):
+            for i in range(NUM_PARAMS): params_l[i] = params_r[i]
+            if play_on_gen: gen.start(params_l, "A")
 
-        # filled rect blend slider (vertical)
+        # ── Column 2: blend slider (vertical) ──
+        blend_slider_x  = COL2_X + COL_BLEND_W // 2
+        blend_slider_y1 = TOP_Y
+        blend_slider_y2 = TOP_Y + 4 * (BTN_H + BTN_GAP) - BTN_GAP
+        blend_h         = blend_slider_y2 - blend_slider_y1
+
         bar_w = 16
-        bar_x = bt_x - bar_w // 2
-        rl.draw_rectangle(bar_x, bt_y1, bar_w, bt_h, rl.DARKGRAY)
-        filled_h = int(blend_t * bt_h)
-        rl.draw_rectangle(bar_x, bt_y1, bar_w, filled_h, rl.ORANGE)
+        bar_x = blend_slider_x - bar_w // 2
+        rl.draw_rectangle(bar_x, blend_slider_y1, bar_w, blend_h, rl.DARKGRAY)
+        filled_h = int(blend_t * blend_h)
+        rl.draw_rectangle(bar_x, blend_slider_y1, bar_w, filled_h, rl.ORANGE)
         knob_h2 = 10
-        knob_y  = bt_y1 + filled_h - knob_h2 // 2
+        knob_y  = blend_slider_y1 + filled_h - knob_h2 // 2
         rl.draw_rectangle(bar_x - 6, knob_y, bar_w + 12, knob_h2, rl.WHITE)
-        rl.draw_text(f"{blend_t:.2f}", bt_x + 16, knob_y - 6, FONT_SIZE - 10, rl.WHITE)
-        rl.draw_text("A", bt_x - 8, bt_y1 - 28, FONT_SIZE, rl.SKYBLUE)
-        rl.draw_text("B", bt_x - 8, bt_y2 + 4,  FONT_SIZE, rl.GREEN)
+        rl.draw_text(f"{blend_t:.2f}", bar_x + bar_w + 4, knob_y - 6, FONT_SIZE - 12, rl.WHITE)
+        rl.draw_text("A", bar_x - 4, blend_slider_y1 - 28, FONT_SIZE, rl.SKYBLUE)
+        rl.draw_text("B", bar_x - 4, blend_slider_y2 + 4,  FONT_SIZE, rl.GREEN)
 
         if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT):
-            if abs(mx - bt_x) < 24 and bt_y1 <= my <= bt_y2:
-                blend_t = max(0.0, min(1.0, (my - bt_y1) / bt_h))
+            if abs(mx - blend_slider_x) < 24 and blend_slider_y1 <= my <= blend_slider_y2:
+                blend_t = max(0.0, min(1.0, (my - blend_slider_y1) / blend_h))
                 blend_dragging = True
         else:
             if was_dragging and blend_dragging and play_on_gen:
                 gen.start(blend_params(params_l, params_r, blend_t), "BLEND")
             blend_dragging = False
 
-        bx   = cx + 10
-        by_b = PANEL_Y + 320
-
-        if draw_button(bx, by_b,       BTN_W, BTN_H, "RANDOMIZE A", RAND_COLOR):
-            randomize_params(params_l)
-            if play_on_gen:
-                gen.start(params_l, "A")
-        if draw_button(bx, by_b + 60,  BTN_W, BTN_H, "RANDOMIZE B", RAND_COLOR):
-            randomize_params(params_r)
-            if play_on_gen:
-                gen.start(params_r, "B")
-        if draw_button(bx, by_b + 140, BTN_W, BTN_H, "PLAY A",      rl.Color(40,  80, 160, 255)):
-            gen.start(params_l, "A")
-        if draw_button(bx, by_b + 200, BTN_W, BTN_H, "PLAY B",      rl.Color(40, 130,  60, 255)):
+        # ── Column 3: B buttons ──
+        if draw_button(COL3_X, btn_y(0), COL_BTN_W, BTN_H, "PLAY B", COLOR_B):
             gen.start(params_r, "B")
-        if draw_button(bx, by_b + 260, BTN_W, BTN_H, "PLAY BLEND",  rl.Color(160, 80,  20, 255)):
-            gen.start(blend_params(params_l, params_r, blend_t), "BLEND")
+        if draw_button(COL3_X, btn_y(1), COL_BTN_W, BTN_H, "BLEND >B", COLOR_XFER):
+            blended = blend_params(params_l, params_r, blend_t)
+            for i in range(NUM_PARAMS): params_r[i] = blended[i]
+            if play_on_gen: gen.start(params_r, "B")
+        if draw_button(COL3_X, btn_y(2), COL_BTN_W, BTN_H, "RND >B", COLOR_RAND):
+            randomize_params(params_r)
+            if play_on_gen: gen.start(params_r, "B")
+        if draw_button(COL3_X, btn_y(3), COL_BTN_W, BTN_H, "A >B", COLOR_COPY):
+            for i in range(NUM_PARAMS): params_r[i] = params_l[i]
+            if play_on_gen: gen.start(params_r, "B")
 
-        # play on generate checkbox
-        play_on_gen = draw_checkbox(bx, by_b + 330, 28, "Play on Generate", play_on_gen)
+        # ── Controls below button rows ──
+        ctrl_y = TOP_Y + 4 * (BTN_H + BTN_GAP) + 16
 
-        # global volume slider
-        global_volume = draw_hslider(bx, by_b + 380, BTN_W - 60, 10, global_volume, "Volume")
+        play_on_gen = draw_checkbox(COL1_X, ctrl_y, 28, "Play on Change", play_on_gen)
+
+        vol_y = ctrl_y + 48
+        global_volume = draw_hslider(COL1_X, vol_y, cw - 16, 10, global_volume, "Vol")
         player.set_volume(global_volume)
 
-        # status
-        status_y = by_b + 440
+        status_y = vol_y + 48
         if gen.running:
-            rl.draw_text(f"Generating {gen.label}...", bx, status_y, FONT_SIZE - 4, rl.YELLOW)
+            rl.draw_text(f"Generating {gen.label}...", COL1_X, status_y, FONT_SIZE - 4, rl.YELLOW)
         elif player.playing:
-            rl.draw_text("PLAYING...", bx, status_y, FONT_SIZE - 4, rl.GREEN)
+            rl.draw_text("PLAYING...", COL1_X, status_y, FONT_SIZE - 4, rl.GREEN)
         else:
-            rl.draw_text("---", bx, status_y, FONT_SIZE - 4, rl.GRAY)
+            rl.draw_text("---", COL1_X, status_y, FONT_SIZE - 4, rl.GRAY)
 
         rl.end_drawing()
 
