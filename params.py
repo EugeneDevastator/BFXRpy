@@ -1,3 +1,4 @@
+# params.py
 import numpy as np
 
 WAVE_NAMES = [
@@ -6,7 +7,6 @@ WAVE_NAMES = [
 ]
 NUM_WAVES = len(WAVE_NAMES)  # 12
 
-# Index mapping matches generator.py p[] array order
 PARAM_NAMES = [
     "WaveType","Volume",
     "Attack","Sustain","SustPunch","Decay",
@@ -22,9 +22,9 @@ PARAM_NAMES = [
     "Overtones","OvtoneFalloff",
 ]
 
-#          min   max   default
+#           min   max   default
 PARAM_RANGES = [
-    (0,    11,   2.0),   # 0  WaveType      (integer 0-11, stored as float)
+    (0,    11,   2.0),   # 0  WaveType
     (0,     1,   0.5),   # 1  Volume
     (0,     1,   0.0),   # 2  Attack
     (0,     1,   0.3),   # 3  Sustain
@@ -63,6 +63,46 @@ assert len(PARAM_RANGES) == NUM_PARAMS
 
 PARAM_DEF = [r[2] for r in PARAM_RANGES]
 
+# Groups: (label, start_index, end_index)  end is exclusive
+PARAM_GROUPS = [
+    ("Wave",       0,  2),
+    ("Envelope",   2,  6),
+    ("Frequency",  6, 10),
+    ("Vibrato",   10, 12),
+    ("Change",    12, 17),
+    ("Duty",      17, 19),
+    ("Repeat",    19, 20),
+    ("Flanger",   20, 22),
+    ("Filters",   22, 27),
+    ("Bit/Comp",  27, 30),
+    ("Overtones", 30, 32),
+]
+
+
+def param_to_t(i, v):
+    """Normalize param value to [0,1] for slider drawing."""
+    lo, hi, _ = PARAM_RANGES[i]
+    return (v - lo) / (hi - lo)
+
+
+def t_to_param(i, t):
+    """Map [0,1] slider position back to param range."""
+    lo, hi, _ = PARAM_RANGES[i]
+    v = lo + t * (hi - lo)
+    if v < lo: v = lo
+    if v > hi: v = hi
+    return v
+
+
+def param_display(i, v):
+    """Human-readable string for param value."""
+    if i == 0:
+        wt = int(v)
+        if wt < 0: wt = 0
+        if wt >= NUM_WAVES: wt = NUM_WAVES - 1
+        return WAVE_NAMES[wt]
+    return f"{v:.2f}"
+
 
 def make_params():
     return list(PARAM_DEF)
@@ -82,29 +122,23 @@ def randomize_params(params):
         lo, hi, _ = PARAM_RANGES[i]
         params[i] = float(rng.uniform(lo, hi))
 
-    # WaveType: integer 0-11
     params[0] = float(int(rng.uniform(0, NUM_WAVES)))
 
-    # StartFreq: match AS randomize distribution
     if rng.random() < 0.5:
         r = rng.uniform(-1.0, 1.0)
-        params[6] = float(r * r)          # pow(rand*2-1, 2)
+        params[6] = float(r * r)
     else:
         r = rng.uniform(0.0, 0.5)
-        params[6] = float(r*r*r + 0.5)   # pow(rand*0.5, 3) + 0.5
+        params[6] = float(r*r*r + 0.5)
 
-    # MinFreq: AS randomize sets to 0
     params[7] = 0.0
 
-    # Slide: AS uses pow(rand*2-1, 5)
     r = rng.uniform(-1.0, 1.0)
     params[8] = float(r**5)
 
-    # DeltaSlide: AS uses pow(rand*2-1, 3)
     r = rng.uniform(-1.0, 1.0)
     params[9] = float(r**3)
 
-    # RepeatSpd: 50% chance of zero
     if rng.random() < 0.5:
         params[19] = 0.0
 
