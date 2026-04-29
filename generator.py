@@ -6,6 +6,7 @@ SAMPLE_RATE = 44100
 
 @njit(cache=True)
 def _generate_wave_jit(p):
+    
     wave_type_f  = p[0]
     master_vol   = p[1]
     attack_t     = p[2]
@@ -39,10 +40,12 @@ def _generate_wave_jit(p):
     overtones    = p[30]
     ot_falloff   = p[31]
 
-    wave_type = int(wave_type_f * 10.0)
-    if wave_type > 10: wave_type = 10
-    wtype_map = (0,1,2,3,4,5,6,7,8,9,11)
-    wt = wtype_map[wave_type]
+
+    # NEW — WaveType is stored as integer 0-11 directly:
+    wt = int(wave_type_f)
+    if wt < 0:  wt = 0
+    if wt > 11: wt = 11
+
 
     mv2 = master_vol * master_vol
 
