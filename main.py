@@ -14,9 +14,17 @@ try:
         root.clipboard_append(text)
         root.update()
         root.destroy()
+    def paste_from_clipboard():
+        root = tk.Tk()
+        root.withdraw()
+        text = root.clipboard_get()
+        root.destroy()
+        return text
 except Exception:
     def copy_to_clipboard(text):
         pass
+    def paste_from_clipboard():
+        return None
 
 from params import (
     PARAM_NAMES, PARAM_RANGES, PARAM_GROUPS, NUM_PARAMS,
@@ -148,7 +156,7 @@ def draw_hslider(x, y, w, h, val, label):
     mx, my = rl.get_mouse_x(), rl.get_mouse_y()
     lw     = measure_text_f(label, SLIDER_FONT_SIZE)
     sx     = x + lw + 8
-    sw     = w - lw - 60
+    sw     = max(w - lw - 60, 40)
     bar_y  = y + SLIDER_FONT_SIZE // 2
     draw_text_f(label, x, y, SLIDER_FONT_SIZE, rl.DARKGRAY)
     filled = int(val * sw)
@@ -230,7 +238,6 @@ def clamp_params_to_ui(params):
 
 
 def dominant_wave_type(blend_t, wt_a, wt_b):
-    """Return wave type index of the dominant side."""
     return wt_a if blend_t <= 0.5 else wt_b
 
 
@@ -258,9 +265,44 @@ def params_to_text(params_l, params_r, blend_t):
     return "\n".join(lines) + "\n"
 
 
+def parse_scene_text(text, params_l, params_r):
+    blend_t = 0.5
+    name_to_idx = {n: i for i, n in enumerate(PARAM_NAMES)}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            if key == "blend_t":
+                try:
+                    blend_t = float(val)
+                except ValueError:
+                    pass
+            elif key.startswith("A.") or key.startswith("B."):
+                side = key[0]
+                pname = key[2:]
+                if pname in name_to_idx:
+                    idx = name_to_idx[pname]
+                    try:
+                        target = params_l if side == "A" else params_r
+                        target[idx] = float(val)
+                    except ValueError:
+                        pass
+    return blend_t
+
+
 def export_scene_bfxr(params_l, params_r, blend_t, filepath):
     with open(filepath, "w") as f:
         f.write(params_to_text(params_l, params_r, blend_t))
+
+
+def load_scene_bfxr(filepath, params_l, params_r):
+    with open(filepath, "r") as f:
+        text = f.read()
+    return parse_scene_text(text, params_l, params_r)
 
 
 # ── Audio ──────────────────────────────────────────────────────────────────────
@@ -336,7 +378,6 @@ class GenJob:
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
 
-    # GenJob.start_blended
     def start_blended(self, params, wave_type_a, wave_type_b, blend_t, label):
         if self.running:
             return
@@ -353,13 +394,87 @@ class GenJob:
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
 
-
     def poll(self):
         if not self.running and self.result is not None:
             r = self.result
             self.result = None
             return r
         return None
+
+
+# ── Export status ──────────────────────────────────────────────────────────────
+
+_export_gen = None
+_export_label = ""
+_export_fn = None
+_export_done_msg = None
+_export_done_time = 0.0
+
+def gen_start_export(params, label, gen_fn):
+    global _export_gen, _export_label, _export_fn, _export_done_msg
+    if _export_gen is not None and _export_gen.is_alive():
+        return
+    _export_done_msg = None
+    _export_label = label
+    _export_fn = gen_fn
+    _export_gen = threading.Thread(target=_do_export, args=(list(params),), daemon=True)
+    _export_gen.start()
+
+def gen_start_export_blend(params_l, params_r, blend_t):
+    global _export_gen, _export_label, _export_fn, _export_done_msg
+    if _export_gen is not None and _export_gen.is_alive():
+        return
+    _export_done_msg = None
+    _export_label = "BLEND"
+    blended = blend_params(params_l, params_r, blend_t)
+    wta = params_l[0]
+    wtb = params_r[0]
+    def _gen(p):
+        return generate_wave_blended(p, wta, wtb, blend_t)
+    _export_fn = _gen
+    _export_gen = threading.Thread(target=_do_export, args=(list(blended),), daemon=True)
+    _export_gen.start()
+
+def _do_export(params):
+    global _export_gen, _export_label, _export_done_msg, _export_done_time
+    import time
+    t0 = time.time()
+    pcm = _export_fn(params)
+    fname = f"bfxr_{_export_label.lower()}.wav"
+    export_wav(pcm, os.path.join(os.getcwd(), fname))
+    dur = time.time() - t0
+    n_samples = len(pcm)
+    audio_dur = n_samples / SAMPLE_RATE
+    _export_done_msg = f"Exported {fname}: {audio_dur:.2f}s audio, {n_samples} samples, {dur:.1f}s gen"
+    _export_done_time = 5.0
+    _export_gen = None
+
+def poll_export_status():
+    global _export_done_msg, _export_done_time
+    if _export_done_msg and _export_done_time > 0:
+        msg = _export_done_msg
+        _export_done_time -= 1.0 / 60.0
+        if _export_done_time <= 0:
+            _export_done_msg = None
+        return msg
+    return None
+
+
+# ── JIT warmup ─────────────────────────────────────────────────────────────────
+
+_warmup_thread = None
+_warmup_done = False
+
+def start_warmup(params):
+    global _warmup_thread, _warmup_done
+    _warmup_done = False
+    p = list(params)
+    def _run():
+        global _warmup_done
+        _ = generate_wave(p)
+        _warmup_done = True
+    _warmup_thread = threading.Thread(target=_run, daemon=True)
+    _warmup_thread.start()
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -372,17 +487,21 @@ def gen_btn_size(label, min_w=100, min_h=40, pad_x=24, pad_y=14, fs=None):
     return max(tw + pad_x, min_w), max(th + pad_y, min_h)
 
 
-def draw_button_sized(x, y, label, color, min_w=100, min_h=40, fs=None):
-    if fs is None:
-        fs = FONT_SIZE - 8
-    bw, bh = gen_btn_size(label, min_w, min_h, fs=fs)
-    clicked = draw_button(x, y, bw, bh, label, color)
-    return clicked, bw, bh
+def compute_layout(sw, sh):
+    PANEL_W  = max(sw // 3 - 10, 300)
+    PANEL_H  = sh - 60
+    PANEL_Y  = 30
+    LEFT_X   = 10
+    RIGHT_X  = sw - PANEL_W - 10
+    CENTER_X = LEFT_X + PANEL_W + 10
+    CENTER_W = max(RIGHT_X - CENTER_X - 10, 200)
+    return PANEL_W, PANEL_H, PANEL_Y, LEFT_X, RIGHT_X, CENTER_X, CENTER_W
 
 
 def main():
     global _font
 
+    rl.set_config_flags(rl.ConfigFlags.FLAG_WINDOW_RESIZABLE)
     rl.init_window(SCREEN_W, SCREEN_H, "bfxr Port")
     rl.set_audio_stream_buffer_size_default(CHUNK)
     rl.init_audio_device()
@@ -405,13 +524,7 @@ def main():
     play_on_gen    = False
     global_volume  = 1.0
 
-    PANEL_W  = 740
-    PANEL_H  = SCREEN_H - 60
-    PANEL_Y  = 30
-    LEFT_X   = 10
-    RIGHT_X  = SCREEN_W - PANEL_W - 10
-    CENTER_X = LEFT_X + PANEL_W + 10
-    CENTER_W = RIGHT_X - CENTER_X - 10
+    start_warmup(params_l)
 
     COLOR_A    = rl.Color(40,  80, 160, 255)
     COLOR_B    = rl.Color(40, 130,  60, 255)
@@ -422,65 +535,31 @@ def main():
     COLOR_EXPORT = rl.Color(100, 100, 160, 255)
     COLOR_CLIP   = rl.Color(80, 120, 80, 255)
 
-    BTN_GAP = 8
-    cx      = CENTER_X
-    cw      = CENTER_W
-
     BTN_FS = FONT_SIZE - 8
 
     COL1_LABELS = ["PLAY A", "A< BLEND", "A< RND", "A< B", "EXPORT A", "COPY A"]
-    col1_sizes  = [gen_btn_size(l, min_w=100, min_h=40, fs=BTN_FS) for l in COL1_LABELS]
-    COL1_X      = cx + 4
-    col1_w      = max(w for w, _ in col1_sizes)
-    col1_x      = cx + 4
-
     COL3_LABELS = ["PLAY B", "BLEND >B", "RND >B", "A >B", "EXPORT B", "COPY B"]
-    col3_sizes  = [gen_btn_size(l, min_w=100, min_h=40, fs=BTN_FS) for l in COL3_LABELS]
-    col3_w      = max(w for w, _ in col3_sizes)
-    col3_x      = cx + cw - col3_w - 4
-
-    COL2_W      = cx + cw - 8 - col1_x - col1_w - col3_w - 8
-
-    TOP_Y     = PANEL_Y + 10
-    CTRL_H    = 32
-    ctrl_y    = TOP_Y
-    vol_y     = ctrl_y + CTRL_H + 6
-    status_y  = vol_y + CTRL_H + 6
-
-    def layout_col(labels, sizes, start_x, start_y, gap):
-        rows = []
-        cy = start_y
-        for label, (w, h) in zip(labels, sizes):
-            rows.append((label, start_x, cy, w, h))
-            cy += h + gap
-        return rows, cy - gap
-
-    col1_rows, col1_end = layout_col(COL1_LABELS, col1_sizes, col1_x, status_y + CTRL_H + 8, BTN_GAP)
-    col3_rows, col3_end = layout_col(COL3_LABELS, col3_sizes, col3_x, status_y + CTRL_H + 8, BTN_GAP)
-
-    blend_slider_y1 = status_y + CTRL_H + 8
-    max_bottom = max(col1_end, col3_end)
-    blend_slider_y2 = max_bottom
-    blend_h = blend_slider_y2 - blend_slider_y1
-
-    export_blend_label = "EXPORT BLEND"
-    copy_scene_label = "COPY SCENE"
-    save_scene_label = "SAVE SCENE (.bfxr)"
-    eb_w, eb_h = gen_btn_size(export_blend_label, min_w=100, min_h=40, fs=BTN_FS)
-    cs_w, cs_h = gen_btn_size(copy_scene_label, min_w=100, min_h=40, fs=BTN_FS)
-    ss_w, ss_h = gen_btn_size(save_scene_label, min_w=100, min_h=40, fs=BTN_FS)
-    col2_btn_w = max(eb_w, cs_w, ss_w)
-    col2_btn_x = cx + 4 + col1_w + 6 + (COL2_W - 10 - col1_w - col2_btn_w) // 2
+    COL2_LABELS = ["EXPORT BLEND", "COPY SCENE", "SAVE SCENE (.bfxr)", "LOAD SCENE", "PASTE SCENE", "PLAY BLEND"]
 
     status_msg = ""
     status_msg_timer = 0.0
+    frame_count = 0
 
     while not rl.window_should_close():
         dt = rl.get_frame_time()
+        frame_count += 1
+        sw = rl.get_screen_width()
+        sh = rl.get_screen_height()
+
         if status_msg_timer > 0:
             status_msg_timer -= dt
             if status_msg_timer <= 0:
                 status_msg = ""
+
+        export_msg = poll_export_status()
+        if export_msg:
+            status_msg = export_msg
+            status_msg_timer = export_msg and 5.0 or 0
 
         player.update()
 
@@ -488,9 +567,49 @@ def main():
         if pcm is not None and play_on_gen:
             player.play(pcm)
 
+        PANEL_W, PANEL_H, PANEL_Y, LEFT_X, RIGHT_X, CENTER_X, CENTER_W = compute_layout(sw, sh)
+
+        BTN_GAP = 8
+        cx = CENTER_X
+        cw = CENTER_W
+
+        col1_sizes  = [gen_btn_size(l, min_w=100, min_h=40, fs=BTN_FS) for l in COL1_LABELS]
+        col1_w      = max(w for w, _ in col1_sizes)
+        col1_x      = cx + 4
+
+        col3_sizes  = [gen_btn_size(l, min_w=100, min_h=40, fs=BTN_FS) for l in COL3_LABELS]
+        col3_w      = max(w for w, _ in col3_sizes)
+        col3_x      = cx + cw - col3_w - 4
+
+        col2_sizes  = [gen_btn_size(l, min_w=100, min_h=40, fs=BTN_FS) for l in COL2_LABELS]
+        col2_w      = max(w for w, _ in col2_sizes)
+        col2_x      = col1_x + col1_w + 12
+
+        CTRL_H    = 32
+        ctrl_y    = PANEL_Y + 10
+        vol_y     = ctrl_y + CTRL_H + 6
+        status_y  = vol_y + CTRL_H + 6
+
+        BTN_START = status_y + CTRL_H + 10
+
+        def layout_col(labels, sizes, start_x, start_y, gap):
+            rows = []
+            cy = start_y
+            for label, (w, h) in zip(labels, sizes):
+                rows.append((label, start_x, cy, w, h))
+                cy += h + gap
+            return rows, cy - gap
+
+        col1_rows, col1_end = layout_col(COL1_LABELS, col1_sizes, col1_x, BTN_START, BTN_GAP)
+        col3_rows, col3_end = layout_col(COL3_LABELS, col3_sizes, col3_x, BTN_START, BTN_GAP)
+
+        blend_h = 200
+        blend_slider_y1 = BTN_START
+        blend_slider_y2 = BTN_START + blend_h
+        col2_rows, col2_end = layout_col(COL2_LABELS, col2_sizes, col2_x, blend_slider_y2 + BTN_GAP, BTN_GAP)
+
         mx = rl.get_mouse_x()
         my = rl.get_mouse_y()
-        was_dragging = blend_dragging
 
         rl.begin_drawing()
         rl.clear_background(rl.Color(240, 240, 240, 255))
@@ -506,21 +625,24 @@ def main():
             if rel_r: gen.start(params_r, "B")
 
         # ── Top controls ──
-        play_on_gen   = draw_checkbox(COL1_X, ctrl_y, 26, "Play on Change", play_on_gen)
-        global_volume = draw_hslider(COL1_X, vol_y, cw - 16, 10, global_volume, "Vol")
+        top_w = cw
+        play_on_gen   = draw_checkbox(cx, ctrl_y, 26, "Play on Change", play_on_gen)
+        global_volume = draw_hslider(cx, vol_y, top_w, 10, global_volume, "Vol")
         player.set_volume(global_volume)
 
-        if gen.running:
-            draw_text_f(f"Generating {gen.label}...", COL1_X, status_y, SLIDER_FONT_SIZE, rl.Color(180, 140, 0, 255))
+        if not _warmup_done:
+            draw_text_f("Warming up audio engine...", cx, status_y, SLIDER_FONT_SIZE, rl.Color(0, 120, 200, 255))
+        elif gen.running:
+            draw_text_f(f"Generating {gen.label}...", cx, status_y, SLIDER_FONT_SIZE, rl.Color(180, 140, 0, 255))
         elif player.playing:
-            draw_text_f("PLAYING...", COL1_X, status_y, SLIDER_FONT_SIZE, rl.Color(40, 130, 60, 255))
+            draw_text_f("PLAYING...", cx, status_y, SLIDER_FONT_SIZE, rl.Color(40, 130, 60, 255))
         elif status_msg:
-            draw_text_f(status_msg, COL1_X, status_y, SLIDER_FONT_SIZE, rl.Color(40, 100, 180, 255))
+            draw_text_f(status_msg, cx, status_y, SLIDER_FONT_SIZE, rl.Color(40, 100, 180, 255))
         else:
-            draw_text_f("---", COL1_X, status_y, SLIDER_FONT_SIZE, rl.GRAY)
+            draw_text_f("---", cx, status_y, SLIDER_FONT_SIZE, rl.GRAY)
 
         # ── Column 1: A buttons ──
-        cy = status_y + CTRL_H + 8
+        cy = BTN_START
         for label, bx, by, bw, bh in col1_rows:
             if label == "PLAY A":
                 if draw_button(bx, cy, bw, bh, label, COLOR_A):
@@ -552,35 +674,58 @@ def main():
                     status_msg_timer = 2.0
             cy += bh + BTN_GAP
 
-        # ── Column 2: blend slider ──
-        blend_t, blend_released = draw_blend_slider(col1_x + col1_w + 6, blend_slider_y1, COL2_W, blend_h, blend_t)
+        # ── Column 2: blend slider + buttons ──
+        blend_t, blend_released = draw_blend_slider(col2_x, blend_slider_y1, col2_w, blend_h, blend_t)
 
         cy2 = blend_slider_y2 + BTN_GAP
-        if draw_button(col2_btn_x, cy2, col2_btn_w, eb_h, "EXPORT BLEND", COLOR_EXPORT):
-            gen_start_export_blend(params_l, params_r, blend_t)
-        cy2 += eb_h + BTN_GAP
-        if draw_button(col2_btn_x, cy2, col2_btn_w, cs_h, "COPY SCENE", COLOR_CLIP):
-            text = params_to_text(params_l, params_r, blend_t)
-            copy_to_clipboard(text)
-            status_msg = "Copied scene to clipboard"
-            status_msg_timer = 2.0
-        cy2 += cs_h + BTN_GAP
-        if draw_button(col2_btn_x, cy2, col2_btn_w, ss_h, "SAVE SCENE (.bfxr)", COLOR_CLIP):
-            export_scene_bfxr(params_l, params_r, blend_t, "scene.bfxr")
-            status_msg = "Saved scene.bfxr"
-            status_msg_timer = 2.0
-
-        blend_btn_y2 = cy2 + ss_h + BTN_GAP
-        if draw_button(col2_btn_x, blend_btn_y2, col2_btn_w, eb_h, "PLAY BLEND", COLOR_BLEND):
-            blended_p = blend_params(params_l, params_r, blend_t)
-            gen.start_blended(blended_p, params_l[0], params_r[0], blend_t, "BLEND")
+        for label, bx, by, bw, bh in col2_rows:
+            if label == "EXPORT BLEND":
+                if draw_button(bx, cy2, bw, bh, label, COLOR_EXPORT):
+                    gen_start_export_blend(params_l, params_r, blend_t)
+            elif label == "COPY SCENE":
+                if draw_button(bx, cy2, bw, bh, label, COLOR_CLIP):
+                    text = params_to_text(params_l, params_r, blend_t)
+                    copy_to_clipboard(text)
+                    status_msg = "Copied scene to clipboard"
+                    status_msg_timer = 2.0
+            elif label == "SAVE SCENE (.bfxr)":
+                if draw_button(bx, cy2, bw, bh, label, COLOR_CLIP):
+                    export_scene_bfxr(params_l, params_r, blend_t, "scene.bfxr")
+                    status_msg = "Saved scene.bfxr"
+                    status_msg_timer = 2.0
+            elif label == "LOAD SCENE":
+                if draw_button(bx, cy2, bw, bh, label, COLOR_CLIP):
+                    if os.path.exists("scene.bfxr"):
+                        bt = load_scene_bfxr("scene.bfxr", params_l, params_r)
+                        blend_t = bt
+                        status_msg = "Loaded scene.bfxr"
+                        status_msg_timer = 2.0
+                    else:
+                        status_msg = "scene.bfxr not found"
+                        status_msg_timer = 2.0
+            elif label == "PASTE SCENE":
+                if draw_button(bx, cy2, bw, bh, label, COLOR_CLIP):
+                    clip = paste_from_clipboard()
+                    if clip:
+                        bt = parse_scene_text(clip, params_l, params_r)
+                        blend_t = bt
+                        status_msg = "Pasted scene from clipboard"
+                        status_msg_timer = 2.0
+                    else:
+                        status_msg = "Clipboard empty or unavailable"
+                        status_msg_timer = 2.0
+            elif label == "PLAY BLEND":
+                if draw_button(bx, cy2, bw, bh, label, COLOR_BLEND):
+                    blended_p = blend_params(params_l, params_r, blend_t)
+                    gen.start_blended(blended_p, params_l[0], params_r[0], blend_t, "BLEND")
+            cy2 += bh + BTN_GAP
 
         if blend_released and play_on_gen:
             blended_p = blend_params(params_l, params_r, blend_t)
             gen.start_blended(blended_p, params_l[0], params_r[0], blend_t, "BLEND")
 
         # ── Column 3: B buttons ──
-        cy = status_y + CTRL_H + 8
+        cy = BTN_START
         for label, bx, by, bw, bh in col3_rows:
             if label == "PLAY B":
                 if draw_button(bx, cy, bw, bh, label, COLOR_B):
@@ -617,41 +762,6 @@ def main():
     player._stop()
     rl.close_audio_device()
     rl.close_window()
-
-
-_export_gen = None
-_export_label = ""
-_export_fn = None
-
-def gen_start_export(params, label, gen_fn):
-    global _export_gen, _export_label, _export_fn
-    if _export_gen is not None and _export_gen.is_alive():
-        return
-    _export_label = label
-    _export_fn = gen_fn
-    _export_gen = threading.Thread(target=_do_export, args=(list(params),), daemon=True)
-    _export_gen.start()
-
-def gen_start_export_blend(params_l, params_r, blend_t):
-    global _export_gen, _export_label
-    if _export_gen is not None and _export_gen.is_alive():
-        return
-    _export_label = "BLEND"
-    blended = blend_params(params_l, params_r, blend_t)
-    wta = params_l[0]
-    wtb = params_r[0]
-    def _gen(p):
-        return generate_wave_blended(p, wta, wtb, blend_t)
-    _export_fn = _gen
-    _export_gen = threading.Thread(target=_do_export, args=(list(blended),), daemon=True)
-    _export_gen.start()
-
-def _do_export(params):
-    global _export_gen, _export_label
-    pcm = _export_fn(params)
-    fname = f"bfxr_{_export_label.lower()}.wav"
-    export_wav(pcm, fname)
-    _export_gen = None
 
 
 if __name__ == "__main__":
