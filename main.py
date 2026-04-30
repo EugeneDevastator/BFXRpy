@@ -1,7 +1,22 @@
 # main.py
 import threading
+import os
+import wave
 import numpy as np
 import pyray as rl
+
+try:
+    import tkinter as tk
+    def copy_to_clipboard(text):
+        root = tk.Tk()
+        root.withdraw()
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        root.update()
+        root.destroy()
+except Exception:
+    def copy_to_clipboard(text):
+        pass
 
 from params import (
     PARAM_NAMES, PARAM_RANGES, PARAM_GROUPS, NUM_PARAMS,
@@ -15,6 +30,7 @@ SCREEN_W  = 1920
 SCREEN_H  = 1080
 FONT_SIZE = 32
 CHUNK     = 4096
+SLIDER_FONT_SIZE = FONT_SIZE - 6
 
 _font = None
 
@@ -36,7 +52,7 @@ def draw_panel(x, y, w, h, params, label):
     rl.draw_rectangle_lines(x, y, w, h, rl.LIGHTGRAY)
     draw_text_f(label, x + 10, y + 8, FONT_SIZE, rl.DARKGRAY)
 
-    lbl_font = FONT_SIZE - 10
+    lbl_font = SLIDER_FONT_SIZE
     val_w    = 72
     pad_left = x + 10
     row_h    = (h - 50) // NUM_PARAMS
@@ -122,7 +138,7 @@ def draw_checkbox(x, y, size, label, checked):
     rl.draw_rectangle_lines(x, y, size, size, rl.DARKGRAY)
     if checked:
         rl.draw_rectangle(x + 4, y + 4, size - 8, size - 8, rl.Color(200, 120, 30, 255))
-    draw_text_f(label, x + size + 8, y + (size - (FONT_SIZE - 8)) // 2, FONT_SIZE - 8, rl.DARKGRAY)
+    draw_text_f(label, x + size + 8, y + (size - SLIDER_FONT_SIZE) // 2, SLIDER_FONT_SIZE, rl.DARKGRAY)
     if hovered and rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
         return not checked
     return checked
@@ -130,17 +146,17 @@ def draw_checkbox(x, y, size, label, checked):
 
 def draw_hslider(x, y, w, h, val, label):
     mx, my = rl.get_mouse_x(), rl.get_mouse_y()
-    lw     = measure_text_f(label, FONT_SIZE - 10)
+    lw     = measure_text_f(label, SLIDER_FONT_SIZE)
     sx     = x + lw + 8
     sw     = w - lw - 60
-    bar_y  = y + (FONT_SIZE - 10) // 2
-    draw_text_f(label, x, y, FONT_SIZE - 10, rl.DARKGRAY)
+    bar_y  = y + SLIDER_FONT_SIZE // 2
+    draw_text_f(label, x, y, SLIDER_FONT_SIZE, rl.DARKGRAY)
     filled = int(val * sw)
     rl.draw_rectangle(sx, bar_y, sw, h, rl.Color(200, 200, 200, 255))
     rl.draw_rectangle(sx, bar_y, filled, h, rl.Color(200, 160, 40, 255))
     knob_w = 6
     rl.draw_rectangle(sx + filled - knob_w // 2, bar_y - 4, knob_w, h + 8, rl.BLACK)
-    draw_text_f(f"{val:.2f}", sx + sw + 6, bar_y, FONT_SIZE - 14, rl.DARKGRAY)
+    draw_text_f(f"{val:.2f}", sx + sw + 6, bar_y, SLIDER_FONT_SIZE - 4, rl.DARKGRAY)
     if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT):
         if abs(my - (bar_y + h // 2)) < 20 and sx <= mx <= sx + sw:
             val = (mx - sx) / sw
@@ -194,13 +210,14 @@ def draw_blend_slider(x, y, w, h, blend_t):
     rl.draw_rectangle(bar_x - 6, knob_py - knob_h2 // 2, bar_w + 12, knob_h2, rl.BLACK)
     draw_text_f(f"{blend_t:.2f}", bar_x + bar_w + 6, knob_py - lbl_fs // 2, FONT_SIZE - 12, rl.DARKGRAY)
 
-    if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT):
-        if abs(mx - (bar_x + bar_w // 2)) < 24 and y <= my <= y + total_h:
-            blend_t = (my - y) / total_h * 3.0 - 1.0
-            if blend_t < -1.0: blend_t = -1.0
-            if blend_t >  2.0: blend_t =  2.0
+    touching = abs(mx - (bar_x + bar_w // 2)) < 24 and y <= my <= y + total_h
+    if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT) and touching:
+        blend_t = (my - y) / total_h * 3.0 - 1.0
+        if blend_t < -1.0: blend_t = -1.0
+        if blend_t >  2.0: blend_t =  2.0
 
-    return blend_t
+    released = touching and rl.is_mouse_button_released(rl.MouseButton.MOUSE_BUTTON_LEFT)
+    return blend_t, released
 
 
 def clamp_params_to_ui(params):
@@ -215,6 +232,35 @@ def clamp_params_to_ui(params):
 def dominant_wave_type(blend_t, wt_a, wt_b):
     """Return wave type index of the dominant side."""
     return wt_a if blend_t <= 0.5 else wt_b
+
+
+def export_wav(pcm, filepath):
+    pcm_int16 = pcm.astype(np.int16)
+    with wave.open(filepath, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(SAMPLE_RATE)
+        wf.writeframes(pcm_int16.tobytes())
+
+
+def params_to_text(params_l, params_r, blend_t):
+    lines = []
+    lines.append("# bfxr scene")
+    lines.append(f"blend_t={blend_t:.6f}")
+    lines.append("")
+    lines.append("# PRESET A")
+    for i in range(NUM_PARAMS):
+        lines.append(f"A.{PARAM_NAMES[i]}={param_display(i, params_l[i])}")
+    lines.append("")
+    lines.append("# PRESET B")
+    for i in range(NUM_PARAMS):
+        lines.append(f"B.{PARAM_NAMES[i]}={param_display(i, params_r[i])}")
+    return "\n".join(lines) + "\n"
+
+
+def export_scene_bfxr(params_l, params_r, blend_t, filepath):
+    with open(filepath, "w") as f:
+        f.write(params_to_text(params_l, params_r, blend_t))
 
 
 # ── Audio ──────────────────────────────────────────────────────────────────────
@@ -318,6 +364,22 @@ class GenJob:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def gen_btn_size(label, min_w=100, min_h=40, pad_x=24, pad_y=14, fs=None):
+    if fs is None:
+        fs = FONT_SIZE - 8
+    tw = measure_text_f(label, fs)
+    th = fs
+    return max(tw + pad_x, min_w), max(th + pad_y, min_h)
+
+
+def draw_button_sized(x, y, label, color, min_w=100, min_h=40, fs=None):
+    if fs is None:
+        fs = FONT_SIZE - 8
+    bw, bh = gen_btn_size(label, min_w, min_h, fs=fs)
+    clicked = draw_button(x, y, bw, bh, label, color)
+    return clicked, bw, bh
+
+
 def main():
     global _font
 
@@ -357,32 +419,69 @@ def main():
     COLOR_COPY = rl.Color(80,  80,  80, 255)
     COLOR_XFER = rl.Color(160, 80,  20, 255)
     COLOR_BLEND= rl.Color(180, 130,  20, 255)
+    COLOR_EXPORT = rl.Color(100, 100, 160, 255)
+    COLOR_CLIP   = rl.Color(80, 120, 80, 255)
 
-    BTN_H   = 52
-    BTN_GAP = 10
+    BTN_GAP = 8
     cx      = CENTER_X
     cw      = CENTER_W
 
-    COL_BTN_W   = (cw - 20) * 2 // 5
-    COL_BLEND_W = cw - 2 * COL_BTN_W - 20
+    BTN_FS = FONT_SIZE - 8
+
+    COL1_LABELS = ["PLAY A", "A< BLEND", "A< RND", "A< B", "EXPORT A", "COPY A"]
+    col1_sizes  = [gen_btn_size(l, min_w=100, min_h=40, fs=BTN_FS) for l in COL1_LABELS]
     COL1_X      = cx + 4
-    COL2_X      = COL1_X + COL_BTN_W + 6
-    COL3_X      = COL2_X + COL_BLEND_W + 6
+    col1_w      = max(w for w, _ in col1_sizes)
+    col1_x      = cx + 4
+
+    COL3_LABELS = ["PLAY B", "BLEND >B", "RND >B", "A >B", "EXPORT B", "COPY B"]
+    col3_sizes  = [gen_btn_size(l, min_w=100, min_h=40, fs=BTN_FS) for l in COL3_LABELS]
+    col3_w      = max(w for w, _ in col3_sizes)
+    col3_x      = cx + cw - col3_w - 4
+
+    COL2_W      = cx + cw - 8 - col1_x - col1_w - col3_w - 8
 
     TOP_Y     = PANEL_Y + 10
-    CTRL_H    = 36
+    CTRL_H    = 32
     ctrl_y    = TOP_Y
-    vol_y     = ctrl_y + CTRL_H + 8
-    status_y  = vol_y + CTRL_H + 8
-    BTN_START = status_y + CTRL_H + 8
+    vol_y     = ctrl_y + CTRL_H + 6
+    status_y  = vol_y + CTRL_H + 6
 
-    def btn_y(r): return BTN_START + r * (BTN_H + BTN_GAP)
+    def layout_col(labels, sizes, start_x, start_y, gap):
+        rows = []
+        cy = start_y
+        for label, (w, h) in zip(labels, sizes):
+            rows.append((label, start_x, cy, w, h))
+            cy += h + gap
+        return rows, cy - gap
 
-    blend_slider_y1 = BTN_START
-    blend_slider_y2 = BTN_START + 4 * (BTN_H + BTN_GAP) - BTN_GAP
-    blend_h         = blend_slider_y2 - blend_slider_y1
+    col1_rows, col1_end = layout_col(COL1_LABELS, col1_sizes, col1_x, status_y + CTRL_H + 8, BTN_GAP)
+    col3_rows, col3_end = layout_col(COL3_LABELS, col3_sizes, col3_x, status_y + CTRL_H + 8, BTN_GAP)
+
+    blend_slider_y1 = status_y + CTRL_H + 8
+    max_bottom = max(col1_end, col3_end)
+    blend_slider_y2 = max_bottom
+    blend_h = blend_slider_y2 - blend_slider_y1
+
+    export_blend_label = "EXPORT BLEND"
+    copy_scene_label = "COPY SCENE"
+    save_scene_label = "SAVE SCENE (.bfxr)"
+    eb_w, eb_h = gen_btn_size(export_blend_label, min_w=100, min_h=40, fs=BTN_FS)
+    cs_w, cs_h = gen_btn_size(copy_scene_label, min_w=100, min_h=40, fs=BTN_FS)
+    ss_w, ss_h = gen_btn_size(save_scene_label, min_w=100, min_h=40, fs=BTN_FS)
+    col2_btn_w = max(eb_w, cs_w, ss_w)
+    col2_btn_x = cx + 4 + col1_w + 6 + (COL2_W - 10 - col1_w - col2_btn_w) // 2
+
+    status_msg = ""
+    status_msg_timer = 0.0
 
     while not rl.window_should_close():
+        dt = rl.get_frame_time()
+        if status_msg_timer > 0:
+            status_msg_timer -= dt
+            if status_msg_timer <= 0:
+                status_msg = ""
+
         player.update()
 
         pcm = gen.poll()
@@ -407,80 +506,152 @@ def main():
             if rel_r: gen.start(params_r, "B")
 
         # ── Top controls ──
-        play_on_gen   = draw_checkbox(COL1_X, ctrl_y, 28, "Play on Change", play_on_gen)
+        play_on_gen   = draw_checkbox(COL1_X, ctrl_y, 26, "Play on Change", play_on_gen)
         global_volume = draw_hslider(COL1_X, vol_y, cw - 16, 10, global_volume, "Vol")
         player.set_volume(global_volume)
 
         if gen.running:
-            draw_text_f(f"Generating {gen.label}...", COL1_X, status_y, FONT_SIZE - 4, rl.Color(180, 140, 0, 255))
+            draw_text_f(f"Generating {gen.label}...", COL1_X, status_y, SLIDER_FONT_SIZE, rl.Color(180, 140, 0, 255))
         elif player.playing:
-            draw_text_f("PLAYING...", COL1_X, status_y, FONT_SIZE - 4, rl.Color(40, 130, 60, 255))
+            draw_text_f("PLAYING...", COL1_X, status_y, SLIDER_FONT_SIZE, rl.Color(40, 130, 60, 255))
+        elif status_msg:
+            draw_text_f(status_msg, COL1_X, status_y, SLIDER_FONT_SIZE, rl.Color(40, 100, 180, 255))
         else:
-            draw_text_f("---", COL1_X, status_y, FONT_SIZE - 4, rl.GRAY)
+            draw_text_f("---", COL1_X, status_y, SLIDER_FONT_SIZE, rl.GRAY)
 
         # ── Column 1: A buttons ──
-        # PLAY A: pure A, blend=0 means only gen A runs
-        if draw_button(COL1_X, btn_y(0), COL_BTN_W, BTN_H, "PLAY A", COLOR_A):
-            gen.start(params_l, "A")
-
-        # A< BLEND: copy blended params into A, dominant wave type written
-        if draw_button(COL1_X, btn_y(1), COL_BTN_W, BTN_H, "A< BLEND", COLOR_XFER):
-            blended = clamp_params_to_ui(blend_params(params_l, params_r, blend_t))
-            wt_dom  = dominant_wave_type(blend_t, params_l[0], params_r[0])
-            blended[0] = wt_dom
-            for i in range(NUM_PARAMS): params_l[i] = blended[i]
-            if play_on_gen: gen.start(params_l, "A")
-
-        if draw_button(COL1_X, btn_y(2), COL_BTN_W, BTN_H, "A< RND", COLOR_RAND):
-            randomize_params(params_l)
-            if play_on_gen: gen.start(params_l, "A")
-
-        if draw_button(COL1_X, btn_y(3), COL_BTN_W, BTN_H, "A< B", COLOR_COPY):
-            for i in range(NUM_PARAMS): params_l[i] = params_r[i]
-            if play_on_gen: gen.start(params_l, "A")
+        cy = status_y + CTRL_H + 8
+        for label, bx, by, bw, bh in col1_rows:
+            if label == "PLAY A":
+                if draw_button(bx, cy, bw, bh, label, COLOR_A):
+                    gen.start(params_l, "A")
+            elif label == "A< BLEND":
+                if draw_button(bx, cy, bw, bh, label, COLOR_XFER):
+                    blended = clamp_params_to_ui(blend_params(params_l, params_r, blend_t))
+                    wt_dom  = dominant_wave_type(blend_t, params_l[0], params_r[0])
+                    blended[0] = wt_dom
+                    for i in range(NUM_PARAMS): params_l[i] = blended[i]
+                    if play_on_gen: gen.start(params_l, "A")
+            elif label == "A< RND":
+                if draw_button(bx, cy, bw, bh, label, COLOR_RAND):
+                    randomize_params(params_l)
+                    if play_on_gen: gen.start(params_l, "A")
+            elif label == "A< B":
+                if draw_button(bx, cy, bw, bh, label, COLOR_COPY):
+                    for i in range(NUM_PARAMS): params_l[i] = params_r[i]
+                    if play_on_gen: gen.start(params_l, "A")
+            elif label == "EXPORT A":
+                if draw_button(bx, cy, bw, bh, label, COLOR_EXPORT):
+                    p = list(params_l)
+                    gen_start_export(p, "A", lambda p: generate_wave(p))
+            elif label == "COPY A":
+                if draw_button(bx, cy, bw, bh, label, COLOR_CLIP):
+                    text = params_to_text(params_l, params_l, 0.0)
+                    copy_to_clipboard(text)
+                    status_msg = "Copied Preset A to clipboard"
+                    status_msg_timer = 2.0
+            cy += bh + BTN_GAP
 
         # ── Column 2: blend slider ──
-        prev_blend_t = blend_t
-        blend_t = draw_blend_slider(COL2_X, blend_slider_y1, COL_BLEND_W, blend_h, blend_t)
+        blend_t, blend_released = draw_blend_slider(col1_x + col1_w + 6, blend_slider_y1, COL2_W, blend_h, blend_t)
 
-        # PLAY BLEND button below slider
-        blend_btn_y = blend_slider_y2 + BTN_GAP
-        if draw_button(COL2_X, blend_btn_y, COL_BLEND_W, BTN_H, "PLAY\nBLEND", COLOR_BLEND):
+        cy2 = blend_slider_y2 + BTN_GAP
+        if draw_button(col2_btn_x, cy2, col2_btn_w, eb_h, "EXPORT BLEND", COLOR_EXPORT):
+            gen_start_export_blend(params_l, params_r, blend_t)
+        cy2 += eb_h + BTN_GAP
+        if draw_button(col2_btn_x, cy2, col2_btn_w, cs_h, "COPY SCENE", COLOR_CLIP):
+            text = params_to_text(params_l, params_r, blend_t)
+            copy_to_clipboard(text)
+            status_msg = "Copied scene to clipboard"
+            status_msg_timer = 2.0
+        cy2 += cs_h + BTN_GAP
+        if draw_button(col2_btn_x, cy2, col2_btn_w, ss_h, "SAVE SCENE (.bfxr)", COLOR_CLIP):
+            export_scene_bfxr(params_l, params_r, blend_t, "scene.bfxr")
+            status_msg = "Saved scene.bfxr"
+            status_msg_timer = 2.0
+
+        blend_btn_y2 = cy2 + ss_h + BTN_GAP
+        if draw_button(col2_btn_x, blend_btn_y2, col2_btn_w, eb_h, "PLAY BLEND", COLOR_BLEND):
             blended_p = blend_params(params_l, params_r, blend_t)
             gen.start_blended(blended_p, params_l[0], params_r[0], blend_t, "BLEND")
 
-
-        dragging_now = rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT)
-        if was_dragging and not dragging_now and play_on_gen:
+        if blend_released and play_on_gen:
             blended_p = blend_params(params_l, params_r, blend_t)
             gen.start_blended(blended_p, params_l[0], params_r[0], blend_t, "BLEND")
 
         # ── Column 3: B buttons ──
-        # PLAY B: pure B, blend=1 means only gen B runs
-        if draw_button(COL3_X, btn_y(0), COL_BTN_W, BTN_H, "PLAY B", COLOR_B):
-            gen.start(params_r, "B")
-
-        # BLEND >B: copy blended params into B, dominant wave type written
-        if draw_button(COL3_X, btn_y(1), COL_BTN_W, BTN_H, "BLEND >B", COLOR_XFER):
-            blended = clamp_params_to_ui(blend_params(params_l, params_r, blend_t))
-            wt_dom  = dominant_wave_type(blend_t, params_l[0], params_r[0])
-            blended[0] = wt_dom
-            for i in range(NUM_PARAMS): params_r[i] = blended[i]
-            if play_on_gen: gen.start(params_r, "B")
-
-        if draw_button(COL3_X, btn_y(2), COL_BTN_W, BTN_H, "RND >B", COLOR_RAND):
-            randomize_params(params_r)
-            if play_on_gen: gen.start(params_r, "B")
-
-        if draw_button(COL3_X, btn_y(3), COL_BTN_W, BTN_H, "A >B", COLOR_COPY):
-            for i in range(NUM_PARAMS): params_r[i] = params_l[i]
-            if play_on_gen: gen.start(params_r, "B")
+        cy = status_y + CTRL_H + 8
+        for label, bx, by, bw, bh in col3_rows:
+            if label == "PLAY B":
+                if draw_button(bx, cy, bw, bh, label, COLOR_B):
+                    gen.start(params_r, "B")
+            elif label == "BLEND >B":
+                if draw_button(bx, cy, bw, bh, label, COLOR_XFER):
+                    blended = clamp_params_to_ui(blend_params(params_l, params_r, blend_t))
+                    wt_dom  = dominant_wave_type(blend_t, params_l[0], params_r[0])
+                    blended[0] = wt_dom
+                    for i in range(NUM_PARAMS): params_r[i] = blended[i]
+                    if play_on_gen: gen.start(params_r, "B")
+            elif label == "RND >B":
+                if draw_button(bx, cy, bw, bh, label, COLOR_RAND):
+                    randomize_params(params_r)
+                    if play_on_gen: gen.start(params_r, "B")
+            elif label == "A >B":
+                if draw_button(bx, cy, bw, bh, label, COLOR_COPY):
+                    for i in range(NUM_PARAMS): params_r[i] = params_l[i]
+                    if play_on_gen: gen.start(params_r, "B")
+            elif label == "EXPORT B":
+                if draw_button(bx, cy, bw, bh, label, COLOR_EXPORT):
+                    p = list(params_r)
+                    gen_start_export(p, "B", lambda p: generate_wave(p))
+            elif label == "COPY B":
+                if draw_button(bx, cy, bw, bh, label, COLOR_CLIP):
+                    text = params_to_text(params_r, params_r, 1.0)
+                    copy_to_clipboard(text)
+                    status_msg = "Copied Preset B to clipboard"
+                    status_msg_timer = 2.0
+            cy += bh + BTN_GAP
 
         rl.end_drawing()
 
     player._stop()
     rl.close_audio_device()
     rl.close_window()
+
+
+_export_gen = None
+_export_label = ""
+_export_fn = None
+
+def gen_start_export(params, label, gen_fn):
+    global _export_gen, _export_label, _export_fn
+    if _export_gen is not None and _export_gen.is_alive():
+        return
+    _export_label = label
+    _export_fn = gen_fn
+    _export_gen = threading.Thread(target=_do_export, args=(list(params),), daemon=True)
+    _export_gen.start()
+
+def gen_start_export_blend(params_l, params_r, blend_t):
+    global _export_gen, _export_label
+    if _export_gen is not None and _export_gen.is_alive():
+        return
+    _export_label = "BLEND"
+    blended = blend_params(params_l, params_r, blend_t)
+    wta = params_l[0]
+    wtb = params_r[0]
+    def _gen(p):
+        return generate_wave_blended(p, wta, wtb, blend_t)
+    _export_fn = _gen
+    _export_gen = threading.Thread(target=_do_export, args=(list(blended),), daemon=True)
+    _export_gen.start()
+
+def _do_export(params):
+    global _export_gen, _export_label
+    pcm = _export_fn(params)
+    fname = f"bfxr_{_export_label.lower()}.wav"
+    export_wav(pcm, fname)
+    _export_gen = None
 
 
 if __name__ == "__main__":
