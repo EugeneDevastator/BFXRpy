@@ -7,8 +7,9 @@ from params import (
     PARAM_NAMES, PARAM_RANGES, PARAM_GROUPS, NUM_PARAMS,
     param_to_t, t_to_param, param_display,
     make_params, randomize_params, blend_params,
+    WAVE_NAMES,
 )
-from generator import generate_wave, SAMPLE_RATE
+from generator import generate_wave, generate_wave_blended, SAMPLE_RATE
 
 SCREEN_W  = 1920
 SCREEN_H  = 1080
@@ -148,23 +149,12 @@ def draw_hslider(x, y, w, h, val, label):
     return val
 
 
-# blend_t range: [-1, 2]
-# segment 0: [-1, 0)  extrapolate beyond A
-# segment 1: [0,  1]  normal lerp
-# segment 2: (1,  2]  extrapolate beyond B
-# A mark at t=0, B mark at t=1
-
 def draw_blend_slider(x, y, w, h, blend_t):
-    """
-    Vertical slider. y..y+h covers blend_t in [-1, 2].
-    Returns new blend_t.
-    """
     mx, my = rl.get_mouse_x(), rl.get_mouse_y()
 
     seg_h   = h // 3
-    total_h = seg_h * 3  # use integer segments
+    total_h = seg_h * 3
 
-    # segment colors
     COLOR_EXTRA_A = rl.Color(180, 100, 40,  180)
     COLOR_CORE    = rl.Color(200, 160, 40,  255)
     COLOR_EXTRA_B = rl.Color(100, 180, 40,  180)
@@ -173,21 +163,16 @@ def draw_blend_slider(x, y, w, h, blend_t):
     bar_w = 16
     bar_x = x + w // 2 - bar_w // 2
 
-    # track background
     rl.draw_rectangle(bar_x, y, bar_w, total_h, COLOR_TRACK)
 
-    # blend_t in [-1,2] -> pixel offset from top
-    # top = -1, bottom = 2  => range = 3
     def t_to_py(t):
         return y + int((t + 1.0) / 3.0 * total_h)
 
-    # fill from A mark (t=0) to knob
-    a_py = t_to_py(0.0)
-    b_py = t_to_py(1.0)
+    a_py    = t_to_py(0.0)
+    b_py    = t_to_py(1.0)
     knob_py = t_to_py(blend_t)
 
     if blend_t < 0.0:
-        # fill extra-A segment
         fill_y = knob_py
         fill_h = a_py - knob_py
         rl.draw_rectangle(bar_x, fill_y, bar_w, fill_h, COLOR_EXTRA_A)
@@ -195,28 +180,20 @@ def draw_blend_slider(x, y, w, h, blend_t):
         fill_h = knob_py - a_py
         rl.draw_rectangle(bar_x, a_py, bar_w, fill_h, COLOR_CORE)
     else:
-        # fill core fully
         rl.draw_rectangle(bar_x, a_py, bar_w, b_py - a_py, COLOR_CORE)
-        # fill extra-B
         rl.draw_rectangle(bar_x, b_py, bar_w, knob_py - b_py, COLOR_EXTRA_B)
 
-    # segment dividers
     rl.draw_line(bar_x - 8, a_py, bar_x + bar_w + 8, a_py, rl.Color(40, 80, 160, 255))
     rl.draw_line(bar_x - 8, b_py, bar_x + bar_w + 8, b_py, rl.Color(40, 130, 60, 255))
 
-    # A / B labels at segment boundaries
     lbl_fs = FONT_SIZE - 4
     draw_text_f("A", bar_x - 24, a_py - lbl_fs // 2, lbl_fs, rl.Color(40, 80, 160, 255))
     draw_text_f("B", bar_x - 24, b_py - lbl_fs // 2, lbl_fs, rl.Color(40, 130, 60, 255))
 
-    # knob
     knob_h2 = 10
     rl.draw_rectangle(bar_x - 6, knob_py - knob_h2 // 2, bar_w + 12, knob_h2, rl.BLACK)
-
-    # value label
     draw_text_f(f"{blend_t:.2f}", bar_x + bar_w + 6, knob_py - lbl_fs // 2, FONT_SIZE - 12, rl.DARKGRAY)
 
-    # input
     if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT):
         if abs(mx - (bar_x + bar_w // 2)) < 24 and y <= my <= y + total_h:
             blend_t = (my - y) / total_h * 3.0 - 1.0
@@ -227,13 +204,17 @@ def draw_blend_slider(x, y, w, h, blend_t):
 
 
 def clamp_params_to_ui(params):
-    """Clamp each param to its valid [lo, hi] range."""
     result = list(params)
     for i in range(NUM_PARAMS):
         lo, hi, _ = PARAM_RANGES[i]
         if result[i] < lo: result[i] = lo
         if result[i] > hi: result[i] = hi
     return result
+
+
+def dominant_wave_type(blend_t, wt_a, wt_b):
+    """Return wave type index of the dominant side."""
+    return wt_a if blend_t <= 0.5 else wt_b
 
 
 # ── Audio ──────────────────────────────────────────────────────────────────────
@@ -309,6 +290,21 @@ class GenJob:
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
 
+    def start_blended(self, params_a, params_b, blend_t, label):
+        if self.running:
+            return
+        self.result  = None
+        self.running = True
+        self.label   = label
+        pa = list(params_a)
+        pb = list(params_b)
+        bt = blend_t
+        def _run():
+            self.result  = generate_wave_blended(pa, pb, bt)
+            self.running = False
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
     def poll(self):
         if not self.running and self.result is not None:
             r = self.result
@@ -327,7 +323,6 @@ def main():
     rl.init_audio_device()
     rl.set_target_fps(60)
 
-    # Load SDF font
     try:
         _font = rl.load_font_ex("Cadman_Bold.otf", FONT_SIZE * 2, rl.ffi.NULL, 0)
         rl.set_texture_filter(_font.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
@@ -338,7 +333,6 @@ def main():
     params_r = make_params()
     params_r[6] = 0.5
 
-    # blend_t in [-1, 2]: -1=full extrapolate A, 0=100%A, 1=100%B, 2=full extrapolate B
     blend_t        = 0.5
     blend_dragging = False
     player         = Player()
@@ -359,6 +353,7 @@ def main():
     COLOR_RAND = rl.Color(120, 60, 160, 255)
     COLOR_COPY = rl.Color(80,  80,  80, 255)
     COLOR_XFER = rl.Color(160, 80,  20, 255)
+    COLOR_BLEND= rl.Color(180, 130,  20, 255)
 
     BTN_H   = 52
     BTN_GAP = 10
@@ -371,17 +366,15 @@ def main():
     COL2_X      = COL1_X + COL_BTN_W + 6
     COL3_X      = COL2_X + COL_BLEND_W + 6
 
-    # Controls row at top, above buttons
     TOP_Y     = PANEL_Y + 10
     CTRL_H    = 36
     ctrl_y    = TOP_Y
     vol_y     = ctrl_y + CTRL_H + 8
     status_y  = vol_y + CTRL_H + 8
-    BTN_START = status_y + CTRL_H + 8   # buttons start here
+    BTN_START = status_y + CTRL_H + 8
 
     def btn_y(r): return BTN_START + r * (BTN_H + BTN_GAP)
 
-    # Blend slider spans 3x button rows
     blend_slider_y1 = BTN_START
     blend_slider_y2 = BTN_START + 4 * (BTN_H + BTN_GAP) - BTN_GAP
     blend_h         = blend_slider_y2 - blend_slider_y1
@@ -423,15 +416,22 @@ def main():
             draw_text_f("---", COL1_X, status_y, FONT_SIZE - 4, rl.GRAY)
 
         # ── Column 1: A buttons ──
+        # PLAY A: pure A, blend=0 means only gen A runs
         if draw_button(COL1_X, btn_y(0), COL_BTN_W, BTN_H, "PLAY A", COLOR_A):
             gen.start(params_l, "A")
+
+        # A< BLEND: copy blended params into A, dominant wave type written
         if draw_button(COL1_X, btn_y(1), COL_BTN_W, BTN_H, "A< BLEND", COLOR_XFER):
             blended = clamp_params_to_ui(blend_params(params_l, params_r, blend_t))
+            wt_dom  = dominant_wave_type(blend_t, params_l[0], params_r[0])
+            blended[0] = wt_dom
             for i in range(NUM_PARAMS): params_l[i] = blended[i]
             if play_on_gen: gen.start(params_l, "A")
+
         if draw_button(COL1_X, btn_y(2), COL_BTN_W, BTN_H, "A< RND", COLOR_RAND):
             randomize_params(params_l)
             if play_on_gen: gen.start(params_l, "A")
+
         if draw_button(COL1_X, btn_y(3), COL_BTN_W, BTN_H, "A< B", COLOR_COPY):
             for i in range(NUM_PARAMS): params_l[i] = params_r[i]
             if play_on_gen: gen.start(params_l, "A")
@@ -440,21 +440,39 @@ def main():
         prev_blend_t = blend_t
         blend_t = draw_blend_slider(COL2_X, blend_slider_y1, COL_BLEND_W, blend_h, blend_t)
 
+        # PLAY BLEND button below slider
+        blend_btn_y = blend_slider_y2 + BTN_GAP
+        if draw_button(COL2_X, blend_btn_y, COL_BLEND_W, BTN_H, "PLAY\nBLEND", COLOR_BLEND):
+            # Use A's wave type as gen A, B's wave type as gen B
+            pa = list(params_l)
+            pb = list(params_r)
+            # pa[0] already = A wave type, pb[0] already = B wave type
+            gen.start_blended(pa, pb, blend_t, "BLEND")
+
         dragging_now = rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT)
         if was_dragging and not dragging_now and play_on_gen:
-            gen.start(clamp_params_to_ui(blend_params(params_l, params_r, blend_t)), "BLEND")
+            pa = list(params_l)
+            pb = list(params_r)
+            gen.start_blended(pa, pb, blend_t, "BLEND")
         blend_dragging = dragging_now and (blend_t != prev_blend_t or was_dragging)
 
         # ── Column 3: B buttons ──
+        # PLAY B: pure B, blend=1 means only gen B runs
         if draw_button(COL3_X, btn_y(0), COL_BTN_W, BTN_H, "PLAY B", COLOR_B):
             gen.start(params_r, "B")
+
+        # BLEND >B: copy blended params into B, dominant wave type written
         if draw_button(COL3_X, btn_y(1), COL_BTN_W, BTN_H, "BLEND >B", COLOR_XFER):
             blended = clamp_params_to_ui(blend_params(params_l, params_r, blend_t))
+            wt_dom  = dominant_wave_type(blend_t, params_l[0], params_r[0])
+            blended[0] = wt_dom
             for i in range(NUM_PARAMS): params_r[i] = blended[i]
             if play_on_gen: gen.start(params_r, "B")
+
         if draw_button(COL3_X, btn_y(2), COL_BTN_W, BTN_H, "RND >B", COLOR_RAND):
             randomize_params(params_r)
             if play_on_gen: gen.start(params_r, "B")
+
         if draw_button(COL3_X, btn_y(3), COL_BTN_W, BTN_H, "A >B", COLOR_COPY):
             for i in range(NUM_PARAMS): params_r[i] = params_l[i]
             if play_on_gen: gen.start(params_r, "B")

@@ -20,6 +20,7 @@ PARAM_NAMES = [
     "HPCutoff","HPCutSweep",
     "BitCrush","BitCrushSwp","Compression",
     "Overtones","OvtoneFalloff",
+    "WaveTypeB","BlendAmt",
 ]
 
 #           min   max   default
@@ -56,6 +57,8 @@ PARAM_RANGES = [
     (0,     1,   0.3),   # 29 Compression
     (0,     1,   0.0),   # 30 Overtones
     (0,     1,   0.0),   # 31 OvtoneFalloff
+    (0,    11,   2.0),   # 32 WaveTypeB
+    (-1,    2,   0.0),   # 33 BlendAmt
 ]
 
 NUM_PARAMS = len(PARAM_NAMES)
@@ -76,17 +79,16 @@ PARAM_GROUPS = [
     ("Filters",   22, 27),
     ("Bit/Comp",  27, 30),
     ("Overtones", 30, 32),
+    ("Blend",     32, 34),
 ]
 
 
 def param_to_t(i, v):
-    """Normalize param value to [0,1] for slider drawing."""
     lo, hi, _ = PARAM_RANGES[i]
     return (v - lo) / (hi - lo)
 
 
 def t_to_param(i, t):
-    """Map [0,1] slider position back to param range."""
     lo, hi, _ = PARAM_RANGES[i]
     v = lo + t * (hi - lo)
     if v < lo: v = lo
@@ -95,8 +97,7 @@ def t_to_param(i, t):
 
 
 def param_display(i, v):
-    """Human-readable string for param value."""
-    if i == 0:
+    if i == 0 or i == 32:
         wt = int(v)
         if wt < 0: wt = 0
         if wt >= NUM_WAVES: wt = NUM_WAVES - 1
@@ -122,7 +123,8 @@ def randomize_params(params):
         lo, hi, _ = PARAM_RANGES[i]
         params[i] = float(rng.uniform(lo, hi))
 
-    params[0] = float(int(rng.uniform(0, NUM_WAVES)))
+    params[0]  = float(int(rng.uniform(0, NUM_WAVES)))
+    params[32] = float(int(rng.uniform(0, NUM_WAVES)))
 
     if rng.random() < 0.5:
         r = rng.uniform(-1.0, 1.0)
@@ -141,6 +143,9 @@ def randomize_params(params):
 
     if rng.random() < 0.5:
         params[19] = 0.0
+
+    # blend defaults to 0 (pure A) on randomize
+    params[33] = 0.0
 
 
 def blend_params(pl, pr, t):

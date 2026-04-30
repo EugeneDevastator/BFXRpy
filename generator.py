@@ -1,3 +1,4 @@
+# generator.py
 import numpy as np
 from numba import njit
 
@@ -6,7 +7,7 @@ SAMPLE_RATE = 44100
 
 @njit(cache=True)
 def _generate_wave_jit(p):
-    
+
     wave_type_f  = p[0]
     master_vol   = p[1]
     attack_t     = p[2]
@@ -39,13 +40,11 @@ def _generate_wave_jit(p):
     compression  = p[29]
     overtones    = p[30]
     ot_falloff   = p[31]
+    # p[32] = WaveTypeB, p[33] = BlendAmt handled externally
 
-
-    # NEW — WaveType is stored as integer 0-11 directly:
     wt = int(wave_type_f)
     if wt < 0:  wt = 0
     if wt > 11: wt = 11
-
 
     mv2 = master_vol * master_vol
 
@@ -425,3 +424,30 @@ def generate_wave(params):
     p = np.array(params, dtype=np.float64)
     raw = _generate_wave_jit(p)
     return (raw * 32767.0).astype(np.int16)
+
+
+def generate_wave_blended(params_a, params_b, blend_t):
+    """
+    Generate both waves independently, then lerp sample-by-sample.
+    blend_t=0 -> pure A, blend_t=1 -> pure B, extrapolates outside [0,1].
+    Lengths may differ; shorter is zero-padded.
+    """
+    raw_a = _generate_wave_jit(np.array(params_a, dtype=np.float64))
+    raw_b = _generate_wave_jit(np.array(params_b, dtype=np.float64))
+
+    len_a = len(raw_a)
+    len_b = len(raw_b)
+    n     = max(len_a, len_b)
+
+    out = np.zeros(n, dtype=np.float32)
+    for i in range(n):
+        sa = raw_a[i] if i < len_a else 0.0
+        sb = raw_b[i] if i < len_b else 0.0
+        out[i] = sa + blend_t * (sb - sa)
+
+    # normalize
+    peak = np.max(np.abs(out))
+    if peak > 1e-9:
+        out *= 0.9 / peak
+
+    return (out * 32767.0).astype(np.int16)
