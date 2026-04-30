@@ -290,20 +290,23 @@ class GenJob:
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
 
-    def start_blended(self, params_a, params_b, blend_t, label):
+    # GenJob.start_blended
+    def start_blended(self, params, wave_type_a, wave_type_b, blend_t, label):
         if self.running:
             return
         self.result  = None
         self.running = True
         self.label   = label
-        pa = list(params_a)
-        pb = list(params_b)
-        bt = blend_t
+        p  = list(params)
+        wta = wave_type_a
+        wtb = wave_type_b
+        bt  = blend_t
         def _run():
-            self.result  = generate_wave_blended(pa, pb, bt)
+            self.result  = generate_wave_blended(p, wta, wtb, bt)
             self.running = False
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
+
 
     def poll(self):
         if not self.running and self.result is not None:
@@ -443,18 +446,14 @@ def main():
         # PLAY BLEND button below slider
         blend_btn_y = blend_slider_y2 + BTN_GAP
         if draw_button(COL2_X, blend_btn_y, COL_BLEND_W, BTN_H, "PLAY\nBLEND", COLOR_BLEND):
-            # Use A's wave type as gen A, B's wave type as gen B
-            pa = list(params_l)
-            pb = list(params_r)
-            # pa[0] already = A wave type, pb[0] already = B wave type
-            gen.start_blended(pa, pb, blend_t, "BLEND")
+            blended_p = blend_params(params_l, params_r, blend_t)
+            gen.start_blended(blended_p, params_l[0], params_r[0], blend_t, "BLEND")
+
 
         dragging_now = rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT)
         if was_dragging and not dragging_now and play_on_gen:
-            pa = list(params_l)
-            pb = list(params_r)
-            gen.start_blended(pa, pb, blend_t, "BLEND")
-        blend_dragging = dragging_now and (blend_t != prev_blend_t or was_dragging)
+            blended_p = blend_params(params_l, params_r, blend_t)
+            gen.start_blended(blended_p, params_l[0], params_r[0], blend_t, "BLEND")
 
         # ── Column 3: B buttons ──
         # PLAY B: pure B, blend=1 means only gen B runs

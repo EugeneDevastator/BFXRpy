@@ -426,14 +426,18 @@ def generate_wave(params):
     return (raw * 32767.0).astype(np.int16)
 
 
-def generate_wave_blended(params_a, params_b, blend_t):
+def generate_wave_blended(params, wave_type_a, wave_type_b, blend_t):
     """
-    Generate both waves independently, then lerp sample-by-sample.
-    blend_t=0 -> pure A, blend_t=1 -> pure B, extrapolates outside [0,1].
-    Lengths may differ; shorter is zero-padded.
+    Runs generator twice with same params but different wave types, blends output.
+    blend_t=0 -> pure wave_type_a, blend_t=1 -> pure wave_type_b.
     """
-    raw_a = _generate_wave_jit(np.array(params_a, dtype=np.float64))
-    raw_b = _generate_wave_jit(np.array(params_b, dtype=np.float64))
+    p_a = np.array(params, dtype=np.float64)
+    p_b = np.array(params, dtype=np.float64)
+    p_a[0] = float(wave_type_a)
+    p_b[0] = float(wave_type_b)
+
+    raw_a = _generate_wave_jit(p_a)
+    raw_b = _generate_wave_jit(p_b)
 
     len_a = len(raw_a)
     len_b = len(raw_b)
@@ -445,9 +449,9 @@ def generate_wave_blended(params_a, params_b, blend_t):
         sb = raw_b[i] if i < len_b else 0.0
         out[i] = sa + blend_t * (sb - sa)
 
-    # normalize
     peak = np.max(np.abs(out))
     if peak > 1e-9:
         out *= 0.9 / peak
 
     return (out * 32767.0).astype(np.int16)
+
