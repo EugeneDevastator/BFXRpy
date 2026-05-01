@@ -37,7 +37,7 @@ from params import (
 from generator import generate_wave, generate_wave_blended, SAMPLE_RATE
 import dialogs
 import ui_components as ui
-from tag_manager import estimate_tags
+from tag_manager import estimate_tags, save_tags, find_matching_tags
 
 SCREEN_W  = 1920
 SCREEN_H  = 1080
@@ -655,68 +655,89 @@ def main():
                     status_msg_timer = 2.0
             cy += bh + BTN_GAP
 
-        # ── Bottom: Tag editors ──
-        tag_y = sh - 210
+        # ── Bottom: Tag editors (below scene buttons) ──
+        # Calculate position below scene buttons
+        scene_bottom = gy + 2 * gh + BTN_GAP  # 2 rows of scene buttons + gap between them
+        tag_y = scene_bottom + 20  # 20px gap after scene buttons
         tag_w = 260
-        tag_h = 120  # 4 lines: (SLIDER_FONT_SIZE + 4) * 4 = (26 + 4) * 4 = 120
-        gap = 20
+        tag_h = 120  # 4 lines
+        tag_gap = 20
         bottom_center_x = sw // 2
 
         # Line 1: A and B side by side
         line1_y = tag_y
-        line1_w = tag_w * 2 + gap
+        line1_w = tag_w * 2 + tag_gap
         start_x = (sw - line1_w) // 2
 
         ui.draw_text_f("A Tags:", start_x, line1_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
-        ui.draw_text_f("B Tags:", start_x + tag_w + gap, line1_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
+        ui.draw_text_f("B Tags:", start_x + tag_w + tag_gap, line1_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
 
         tag_editor_a.update()
-        tag_editor_a.draw(start_x, line1_y, tag_w, tag_h)
+        tag_editor_a.draw(start_x, line1_y, tag_w, tag_h, dark=False)
         tag_editor_b.update()
-        tag_editor_b.draw(start_x + tag_w + gap, line1_y, tag_w, tag_h)
+        tag_editor_b.draw(start_x + tag_w + tag_gap, line1_y, tag_w, tag_h, dark=False)
 
-        # Buttons below A
+        # Bigger buttons below A
         btn_y = line1_y + tag_h + 4
-        btn_w = tag_w // 2 - 2
+        btn_w = tag_w // 2 - 4
+        btn_h = 26
 
-        if ui.button(start_x, btn_y, btn_w, 18, "Save A", COLOR_TAG):
+        if ui.button(start_x, btn_y, btn_w, btn_h, "Save A", COLOR_TAG):
             tag_a = tag_editor_a.get_text().strip()
+            save_tags("A", params_l, tag_a)
             status_msg = "Saved A tags: " + tag_a
             status_msg_timer = 2.0
-        if ui.button(start_x + btn_w + 4, btn_y, btn_w, 18, "Est A", COLOR_TAG):
-            result = estimate_tags(params_l, params_l[0])
-            status_msg = "Estimate A: " + ", ".join(result)
-            status_msg_timer = 2.0
+        if ui.button(start_x + btn_w + 8, btn_y, btn_w, btn_h, "Est A", COLOR_TAG):
+            matches = find_matching_tags(params_l, params_l[0])
+            if matches:
+                best_tags, best_score = matches[0]
+                tag_editor_a.set_text(best_tags)
+                status_msg = f"Est A (match: {best_score:.0%}): {best_tags}"
+            else:
+                status_msg = "No matches in database"
+            status_msg_timer = 3.0
 
-        # Buttons below B
-        if ui.button(start_x + tag_w + gap, btn_y, btn_w, 18, "Save B", COLOR_TAG):
+        # Bigger buttons below B
+        if ui.button(start_x + tag_w + tag_gap, btn_y, btn_w, btn_h, "Save B", COLOR_TAG):
             tag_b = tag_editor_b.get_text().strip()
+            save_tags("B", params_r, tag_b)
             status_msg = "Saved B tags: " + tag_b
             status_msg_timer = 2.0
-        if ui.button(start_x + tag_w + gap + btn_w + 4, btn_y, btn_w, 18, "Est B", COLOR_TAG):
-            result = estimate_tags(params_r, params_r[0])
-            status_msg = "Estimate B: " + ", ".join(result)
-            status_msg_timer = 2.0
+        if ui.button(start_x + tag_w + tag_gap + btn_w + 8, btn_y, btn_w, btn_h, "Est B", COLOR_TAG):
+            matches = find_matching_tags(params_r, params_r[0])
+            if matches:
+                best_tags, best_score = matches[0]
+                tag_editor_b.set_text(best_tags)
+                status_msg = f"Est B (match: {best_score:.0%}): {best_tags}"
+            else:
+                status_msg = "No matches in database"
+            status_msg_timer = 3.0
 
         # Line 2: Blend centered below
-        line2_y = btn_y + 26
+        line2_y = btn_y + btn_h + 20
         blend_x = bottom_center_x - tag_w // 2
 
         ui.draw_text_f("Blend Tags:", blend_x, line2_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
         tag_editor_blend.update()
-        tag_editor_blend.draw(blend_x, line2_y, tag_w, tag_h)
+        tag_editor_blend.draw(blend_x, line2_y, tag_w, tag_h, dark=False)
 
         btn_y2 = line2_y + tag_h + 4
-        if ui.button(blend_x, btn_y2, btn_w, 18, "Save Bl", COLOR_TAG):
+        if ui.button(blend_x, btn_y2, btn_w, btn_h, "Save Bl", COLOR_TAG):
             tag_bl = tag_editor_blend.get_text().strip()
+            save_tags("BLEND", blend_params(params_l, params_r, blend_t), tag_bl, blend_t)
             status_msg = "Saved Blend tags: " + tag_bl
             status_msg_timer = 2.0
-        if ui.button(blend_x + btn_w + 4, btn_y2, btn_w, 18, "Est Bl", COLOR_TAG):
+        if ui.button(blend_x + btn_w + 8, btn_y2, btn_w, btn_h, "Est Bl", COLOR_TAG):
             blended = blend_params(params_l, params_r, blend_t)
             dom_wt = params_l[0] if blend_t <= 0.5 else params_r[0]
-            result = estimate_tags(blended, dom_wt)
-            status_msg = "Estimate Bl: " + ", ".join(result)
-            status_msg_timer = 2.0
+            matches = find_matching_tags(blended, dom_wt)
+            if matches:
+                best_tags, best_score = matches[0]
+                tag_editor_blend.set_text(best_tags)
+                status_msg = f"Est Bl (match: {best_score:.0%}): {best_tags}"
+            else:
+                status_msg = "No matches in database"
+            status_msg_timer = 3.0
 
         rl.end_drawing()
 

@@ -1,3 +1,5 @@
+# ui_components.py - Immediate-mode UI components
+
 import pyray as rl
 from params import PARAM_NAMES, PARAM_RANGES, PARAM_GROUPS, NUM_PARAMS, param_to_t, t_to_param, param_display
 
@@ -204,45 +206,62 @@ class TextEditor:
         self.active = False
         self._tick = 0
 
-    def draw(self, x, y, w, h, font_size=None):
+    def draw(self, x, y, w, h, font_size=None, dark=False):
         if font_size is None:
             font_size = SLIDER_FONT_SIZE
 
-        self._tick += 1
         mx, my = rl.get_mouse_x(), rl.get_mouse_y()
+        self._tick += 1
 
-        rl.draw_rectangle(x, y, w, h, rl.Color(40, 40, 40, 255))
+        # Background - light theme by default
+        if dark:
+            bg = rl.Color(40, 40, 40, 255)
+            text_color = rl.WHITE
+            active_bg = rl.Color(60, 60, 100, 255)
+            cursor_color = rl.RAYWHITE
+        else:
+            bg = rl.Color(250, 250, 250, 255)
+            text_color = rl.DARKGRAY
+            active_bg = rl.Color(200, 200, 240, 255)
+            cursor_color = rl.BLACK
+
+        rl.draw_rectangle(x, y, w, h, bg)
         rl.draw_rectangle_lines(x, y, w, h, rl.LIGHTGRAY)
 
         line_h = font_size + 4
         max_lines = max(1, h // line_h)
 
+        # Clamp cursor
         self.cursor_line = max(0, min(self.cursor_line, len(self.lines) - 1))
-        self.cursor_col = max(0, min(self.cursor_col, len(self.lines[self.cursor_line])))
+        if len(self.lines) > 0:
+            self.cursor_col = max(0, min(self.cursor_col, len(self.lines[self.cursor_line])))
 
+        # Auto-scroll
         if self.cursor_line < self.scroll_y:
             self.scroll_y = self.cursor_line
         elif self.cursor_line >= self.scroll_y + max_lines:
             self.scroll_y = self.cursor_line - max_lines + 1
 
-        for i in range(self.scroll_y, min(len(self.lines), self.scroll_y + max_lines)):
-            line_y = y + 4 + (i - self.scroll_y) * line_h
+        # Draw visible lines
+        for i in range(int(self.scroll_y), min(len(self.lines), int(self.scroll_y) + int(max_lines))):
+            line_y = int(y + 4 + (i - self.scroll_y) * line_h)
             text = self.lines[i]
             is_active = (i == self.cursor_line and self.active)
 
             if is_active:
-                cursor_x = x + 4 + measure_text_f(text[:self.cursor_col], font_size)
-                rl.draw_rectangle(x + 4, int(line_y), int(w - 8), int(line_h - 2), rl.Color(60, 60, 100, 255))
+                cursor_x = int(x + 4 + measure_text_f(text[:self.cursor_col], font_size))
+                rl.draw_rectangle(int(x + 4), int(line_y), int(w - 8), int(line_h - 2), active_bg)
                 if (self._tick // 20) % 2 == 0:
-                    rl.draw_rectangle(int(cursor_x), int(line_y + 2), 2, int(font_size), rl.RAYWHITE)
+                    rl.draw_rectangle(cursor_x, int(line_y + 2), 2, int(font_size), cursor_color)
 
-            draw_text_f(text, x + 4, int(line_y), font_size, rl.RAYWHITE)
+            draw_text_f(text, int(x + 4), int(line_y), font_size, text_color)
 
+        # Mouse click
         if rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
             if x <= mx <= x + w and y <= my <= y + h:
                 self.active = True
                 rel_y = my - y - 4
-                clicked_line = self.scroll_y + rel_y // line_h
+                clicked_line = int(self.scroll_y) + rel_y // line_h
                 if 0 <= clicked_line < len(self.lines):
                     self.cursor_line = clicked_line
                     line_text = self.lines[self.cursor_line]
@@ -262,29 +281,18 @@ class TextEditor:
         if not self.active:
             return
 
-        if rl.is_key_pressed(rl.KeyboardKey.KEY_RIGHT):
+        # Key repeat for held keys
+        if rl.is_key_pressed(rl.KeyboardKey.KEY_RIGHT) or (rl.is_key_down(rl.KeyboardKey.KEY_RIGHT) and self._tick % 4 == 0):
             self._move_right()
-        elif rl.is_key_down(rl.KeyboardKey.KEY_RIGHT) and self._tick % 4 == 0:
-            self._move_right()
-        elif rl.is_key_pressed(rl.KeyboardKey.KEY_LEFT):
+        if rl.is_key_pressed(rl.KeyboardKey.KEY_LEFT) or (rl.is_key_down(rl.KeyboardKey.KEY_LEFT) and self._tick % 4 == 0):
             self._move_left()
-        elif rl.is_key_down(rl.KeyboardKey.KEY_LEFT) and self._tick % 4 == 0:
-            self._move_left()
-        elif rl.is_key_pressed(rl.KeyboardKey.KEY_UP):
+        if rl.is_key_pressed(rl.KeyboardKey.KEY_UP) or (rl.is_key_down(rl.KeyboardKey.KEY_UP) and self._tick % 4 == 0):
             self._move_up()
-        elif rl.is_key_down(rl.KeyboardKey.KEY_UP) and self._tick % 4 == 0:
-            self._move_up()
-        elif rl.is_key_pressed(rl.KeyboardKey.KEY_DOWN):
+        if rl.is_key_pressed(rl.KeyboardKey.KEY_DOWN) or (rl.is_key_down(rl.KeyboardKey.KEY_DOWN) and self._tick % 4 == 0):
             self._move_down()
-        elif rl.is_key_down(rl.KeyboardKey.KEY_DOWN) and self._tick % 4 == 0:
-            self._move_down()
-        elif rl.is_key_pressed(rl.KeyboardKey.KEY_BACKSPACE):
+        if rl.is_key_pressed(rl.KeyboardKey.KEY_BACKSPACE) or (rl.is_key_down(rl.KeyboardKey.KEY_BACKSPACE) and self._tick % 4 == 0):
             self._backspace()
-        elif rl.is_key_down(rl.KeyboardKey.KEY_BACKSPACE) and self._tick % 4 == 0:
-            self._backspace()
-        elif rl.is_key_pressed(rl.KeyboardKey.KEY_DELETE):
-            self._delete()
-        elif rl.is_key_down(rl.KeyboardKey.KEY_DELETE) and self._tick % 4 == 0:
+        if rl.is_key_pressed(rl.KeyboardKey.KEY_DELETE) or (rl.is_key_down(rl.KeyboardKey.KEY_DELETE) and self._tick % 4 == 0):
             self._delete()
 
         if rl.is_key_pressed(rl.KeyboardKey.KEY_ENTER):
