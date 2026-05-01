@@ -7,27 +7,6 @@ import glob
 import numpy as np
 import pyray as rl
 
-try:
-    import tkinter as tk
-    def copy_to_clipboard(text):
-        root = tk.Tk()
-        root.withdraw()
-        root.clipboard_clear()
-        root.clipboard_append(text)
-        root.update()
-        root.destroy()
-    def paste_from_clipboard():
-        root = tk.Tk()
-        root.withdraw()
-        text = root.clipboard_get()
-        root.destroy()
-        return text
-except Exception:
-    def copy_to_clipboard(text):
-        pass
-    def paste_from_clipboard():
-        return None
-
 from params import (
     PARAM_NAMES, PARAM_RANGES, PARAM_GROUPS, NUM_PARAMS,
     param_to_t, t_to_param, param_display,
@@ -395,7 +374,7 @@ def main():
     blend_dragging = False
     player         = Player()
     gen            = GenJob()
-    play_on_gen    = False
+    play_on_gen    = True
     global_volume  = 1.0
 
     start_warmup(params_l)
@@ -410,7 +389,6 @@ def main():
     COLOR_XFER = rl.Color(160, 80,  20, 255)
     COLOR_BLEND= rl.Color(180, 130,  20, 255)
     COLOR_EXPORT = rl.Color(100, 100, 160, 255)
-    COLOR_CLIP   = rl.Color(80, 120, 80, 255)
     COLOR_TAG    = rl.Color(80, 120, 160, 255)
 
     # Text editors for parameter tags
@@ -421,10 +399,10 @@ def main():
     tag_editor_b.set_text("")
     tag_editor_blend.set_text("")
 
-    COL1_LABELS = ["PLAY A", "A< BLEND", "A< RND", "A< B", "NOVEL A", "EXPORT A", "COPY A"]
-    COL3_LABELS = ["PLAY B", "BLEND >B", "RND >B", "A >B", "EXPORT B", "COPY B"]
+    COL1_LABELS = ["PLAY A", "A< BLEND", "A< RND", "A< B", "NOVEL A", "EXPORT A"]
+    COL3_LABELS = ["PLAY B", "BLEND >B", "RND >B", "A >B", "EXPORT B"]
     COL2_LABELS = ["EXPORT BLEND"]
-    SCENE_BTN_LABELS = ["SAVE SCENE (.bfxr)", "LOAD SCENE", "COPY SCENE", "PASTE SCENE"]
+    SCENE_BTN_LABELS = ["SAVE SCENE (.bfxr)", "LOAD SCENE"]
 
     UNIFIED_BTN_W = 180
     UNIFIED_BTN_H = 44
@@ -498,12 +476,11 @@ def main():
         gw = UNIFIED_BTN_W
         gh = UNIFIED_BTN_H
         gap = BTN_GAP
-        # 2x2 grid positions
+        # Scene buttons: SAVE, LOAD, EXPORT BLEND, EXPORT CURRENT
         scene_positions = [
             (gx,           gy,           gw, gh, "SAVE SCENE (.bfxr)"),
             (gx + gw + gap, gy,           gw, gh, "LOAD SCENE"),
-            (gx,           gy + gh + gap, gw, gh, "COPY SCENE"),
-            (gx + gw + gap, gy + gh + gap, gw, gh, "PASTE SCENE"),
+            (gx,           gy + gh + gap, gw, gh, "EXPORT BLEND")
         ]
 
         mx = rl.get_mouse_x()
@@ -577,12 +554,6 @@ def main():
                     else:
                         status_msg = "Export cancelled"
                         status_msg_timer = 2.0
-            elif label == "COPY A":
-                if ui.button(bx, cy, bw, bh, label, COLOR_CLIP):
-                    text = params_to_text(params_l, params_l, 0.0)
-                    copy_to_clipboard(text)
-                    status_msg = "Copied Preset A to clipboard"
-                    status_msg_timer = 2.0
             cy += bh + BTN_GAP
 
         # ── Column 2: PLAY BLEND above slider, then slider, then other buttons ──
@@ -596,7 +567,7 @@ def main():
         # Draw scene buttons in 2x2 grid
         for bx, by, bw, bh, label in scene_positions:
             if label == "SAVE SCENE (.bfxr)":
-                if ui.button(bx, by, bw, bh, label, COLOR_CLIP):
+                if ui.button(bx, by, bw, bh, label, COLOR_EXPORT):
                     path = dialogs.get_save_scene_file()
                     if path:
                         text = params_to_text(params_l, params_r, blend_t)
@@ -608,7 +579,7 @@ def main():
                         status_msg = "Save cancelled"
                         status_msg_timer = 2.0
             elif label == "LOAD SCENE":
-                if ui.button(bx, by, bw, bh, label, COLOR_CLIP):
+                if ui.button(bx, by, bw, bh, label, COLOR_EXPORT):
                     path = dialogs.get_load_scene_file()
                     if path:
                         with open(path, "r") as f:
@@ -620,23 +591,29 @@ def main():
                     else:
                         status_msg = "Load cancelled"
                         status_msg_timer = 2.0
-            elif label == "COPY SCENE":
-                if ui.button(bx, by, bw, bh, label, COLOR_CLIP):
-                    text = params_to_text(params_l, params_r, blend_t)
-                    copy_to_clipboard(text)
-                    status_msg = "Copied scene to clipboard"
-                    status_msg_timer = 2.0
-            elif label == "PASTE SCENE":
-                if ui.button(bx, by, bw, bh, label, COLOR_CLIP):
-                    clip = paste_from_clipboard()
-                    if clip:
-                        bt = parse_scene_text(clip, params_l, params_r)
-                        blend_t = bt
-                        status_msg = "Pasted scene from clipboard"
+            elif label == "EXPORT BLEND":
+                if ui.button(bx, by, bw, bh, label, COLOR_EXPORT):
+                    blended = blend_params(params_l, params_r, blend_t)
+                    wta = params_l[0]
+                    wtb = params_r[0]
+                    path = dialogs.get_save_wav_file(default_name="bfxr_blend.wav")
+                    if path:
+                        pcm = np.array(generate_wave_blended(blended, wta, wtb, blend_t), dtype=np.float32)
+                        maxv = np.max(np.abs(pcm)) if len(pcm) > 0 else 0.0
+                        if maxv > 0.0:
+                            pcm = pcm / maxv
+                        pcm_int16 = (pcm * 32767.0).astype(np.int16)
+                        with wave.open(path, "wb") as wf:
+                            wf.setnchannels(1)
+                            wf.setsampwidth(2)
+                            wf.setframerate(SAMPLE_RATE)
+                            wf.writeframes(pcm_int16.tobytes())
+                        status_msg = f"Exported {os.path.basename(path)}"
                         status_msg_timer = 2.0
                     else:
-                        status_msg = "Clipboard empty or unavailable"
+                        status_msg = "Export cancelled"
                         status_msg_timer = 2.0
+
 
         # Also handle blend_released for play_on_gen
         if blend_released and play_on_gen:
@@ -668,12 +645,6 @@ def main():
                 if ui.button(bx, cy, bw, bh, label, COLOR_EXPORT):
                     p = list(params_r)
                     gen_start_export(p, "B", lambda p: generate_wave(p))
-            elif label == "COPY B":
-                if ui.button(bx, cy, bw, bh, label, COLOR_CLIP):
-                    text = params_to_text(params_r, params_r, 1.0)
-                    copy_to_clipboard(text)
-                    status_msg = "Copied Preset B to clipboard"
-                    status_msg_timer = 2.0
             cy += bh + BTN_GAP
 
         # ── Bottom: Tag editors (below scene buttons) ──
@@ -691,12 +662,9 @@ def main():
         start_x = (sw - line1_w) // 2
 
         ui.draw_text_f("A Tags:", start_x, line1_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
-        ui.draw_text_f("B Tags:", start_x + tag_w + tag_gap, line1_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
 
         tag_editor_a.update()
         tag_editor_a.draw(start_x, line1_y, tag_w, tag_h, dark=False)
-        tag_editor_b.update()
-        tag_editor_b.draw(start_x + tag_w + tag_gap, line1_y, tag_w, tag_h, dark=False)
 
         # Bigger buttons below A
         btn_y = line1_y + tag_h + 4
@@ -718,55 +686,12 @@ def main():
                 status_msg = "No matches in database"
             status_msg_timer = 3.0
 
-        # Bigger buttons below B
-        if ui.button(start_x + tag_w + tag_gap, btn_y, btn_w, btn_h, "Save B", COLOR_TAG):
-            tag_b = tag_editor_b.get_text().strip()
-            save_tags("B", params_r, tag_b)
-            status_msg = "Saved B tags: " + tag_b
-            status_msg_timer = 2.0
-        # Est B commented out per request
-        # if ui.button(start_x + tag_w + tag_gap + btn_w + 8, btn_y, btn_w, btn_h, "Est B", COLOR_TAG):
-        #     matches = find_matching_tags(params_r, params_r[0])
-        #     if matches:
-        #         best_tags, best_score = matches[0]
-        #         tag_editor_b.set_text(best_tags)
-        #         status_msg = f"Est B (match: {best_score:.0%}): {best_tags}"
-        #     else:
-        #         status_msg = "No matches in database"
-        #     status_msg_timer = 3.0
-
-        # Line 2: Blend centered below
-        line2_y = btn_y + btn_h + 20
-        blend_x = bottom_center_x - tag_w // 2
-
-        ui.draw_text_f("Blend Tags:", blend_x, line2_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
-        tag_editor_blend.update()
-        tag_editor_blend.draw(blend_x, line2_y, tag_w, tag_h, dark=False)
-
-        btn_y2 = line2_y + tag_h + 4
-        if ui.button(blend_x, btn_y2, btn_w, btn_h, "Save Bl", COLOR_TAG):
-            tag_bl = tag_editor_blend.get_text().strip()
-            save_tags("BLEND", blend_params(params_l, params_r, blend_t), tag_bl, blend_t)
-            status_msg = "Saved Blend tags: " + tag_bl
-            status_msg_timer = 2.0
-        # Est Bl commented out per request
-        # if ui.button(blend_x + btn_w + 8, btn_y2, btn_w, btn_h, "Est Bl", COLOR_TAG):
-        #     blended = blend_params(params_l, params_r, blend_t)
-        #     dom_wt = params_l[0] if blend_t <= 0.5 else params_r[0]
-        #     matches = find_matching_tags(blended, dom_wt)
-        #     if matches:
-        #         best_tags, best_score = matches[0]
-        #         tag_editor_blend.set_text(best_tags)
-        #         status_msg = f"Est Bl (match: {best_score:.0%}): {best_tags}"
-        #     else:
-        #         status_msg = "No matches in database"
-        #     status_msg_timer = 3.0
 
         # ── Waveform & Spectrogram at bottom of center panel ──
-        viz_y = sh - 280  # 120 + 160 (1.33x) + padding from bottom
+        viz_y = sh - 380  # 120 + 160 (1.33x) + padding from bottom
         viz_w = CENTER_W - 20
         viz_h = 120  # Waveform height
-        spec_h = int(viz_h * 1.33)  # Spectrogram 1.33x taller (fits better)
+        spec_h = int(viz_h * 2)  # Spectrogram 1.33x taller (fits better)
         viz_x = CENTER_X + 10
 
         if last_pcm is not None:
