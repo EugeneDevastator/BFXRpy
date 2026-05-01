@@ -13,6 +13,35 @@ GRADIENT = [
     (1.0,  255, 255, 255),
 ]
 
+# Texture cache for spectrogram reuse (keyed by wave data hash)
+_tex_cache = {}  # hash(wave.tobytes()) -> texture
+
+def _wave_hash(wave):
+    """Compute hash of wave data for caching"""
+    return hash(wave.tobytes())
+
+def draw_waveform(wave, x, y, w, h):
+    """Draw waveform using line rendering. wave is float32 normalized -1..1"""
+    if wave is None or len(wave) == 0:
+        return
+
+    n = len(wave)
+    step = max(1, n // w)
+
+    rl.draw_rectangle(x, y, w, h, rl.RAYWHITE)
+    rl.draw_rectangle_lines(x, y, w, h, rl.LIGHTGRAY)
+
+    cy = y + h // 2
+    prev_x = x
+    prev_y = cy
+
+    for i in range(0, n, step):
+        px = x + int((i / n) * w)
+        py = cy - int(wave[i] * (h // 2 - 2))
+        if i > 0:
+            rl.draw_line(prev_x, prev_y, px, py, rl.BLACK)
+        prev_x, prev_y = px, py
+
 def compute_spectrogram_from_wave(wave, n_fft=2048, overlap=0.75):
     """Compute spectrogram from in-memory wave data (float32, -1..1)"""
     if wave is None or len(wave) == 0:
@@ -79,10 +108,22 @@ def build_texture(rgba):
     img.data = rl.ffi.cast("void *", rl.ffi.from_buffer(rgba))
     return rl.load_texture_from_image(img)
 
-def draw_spectro(tex, x, y, w, h):
+def draw_spectro(tex, x, y, w, h, tint=rl.WHITE):
     src = rl.Rectangle(0, 0, float(tex.width), float(tex.height))
     dst = rl.Rectangle(float(x), float(y), float(w), float(h))
-    rl.draw_texture_pro(tex, src, dst, rl.Vector2(0, 0), 0.0, rl.WHITE)
+    rl.draw_texture_pro(tex, src, dst, rl.Vector2(0, 0), 0.0, tint)
+
+def clear_texture_cache():
+    """Clear cached textures. Call on cleanup."""
+    global _tex_cache, _waveform_tex_cache, _waveform_wave_id
+    for tex in _tex_cache.values():
+        if tex:
+            rl.unload_texture(tex)
+    _tex_cache.clear()
+    if _waveform_tex_cache:
+        rl.unload_texture(_waveform_tex_cache)
+    _waveform_tex_cache = None
+    _waveform_wave_id = None
 
 def main():
     wav_path = sys.argv[1] if len(sys.argv) > 1 else "audio.wav"

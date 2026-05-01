@@ -38,7 +38,6 @@ from generator import generate_wave, generate_wave_blended, SAMPLE_RATE
 import dialogs
 import ui_components as ui
 from tag_manager import estimate_tags, save_tags, find_matching_tags, generate_novel_params
-import audio_viz
 import spectrodemo as spectro
 
 SCREEN_W  = 1920
@@ -460,20 +459,20 @@ def main():
 
         PANEL_W, PANEL_H, PANEL_Y, LEFT_X, RIGHT_X, CENTER_X, CENTER_W = compute_layout(sw, sh)
 
-        BTN_GAP = 8
+        BTN_GAP = 6
         cx = CENTER_X
         cw = CENTER_W
 
         col1_x = cx + 4
         col3_x = cx + cw - UNIFIED_BTN_W - 4
-        col2_x = col1_x + UNIFIED_BTN_W + 12
+        col2_x = col1_x + UNIFIED_BTN_W + 8
 
-        CTRL_H    = 32
-        ctrl_y    = PANEL_Y + 10
-        vol_y     = ctrl_y + CTRL_H + 6
-        status_y  = vol_y + CTRL_H + 6
+        CTRL_H    = 28
+        ctrl_y    = PANEL_Y + 8
+        vol_y     = ctrl_y + CTRL_H + 4
+        status_y  = vol_y + CTRL_H + 4
 
-        BTN_START = status_y + CTRL_H + 10
+        BTN_START = status_y + CTRL_H + 8
 
         def layout_col_unified(labels, start_x, start_y, gap, w=UNIFIED_BTN_W, h=UNIFIED_BTN_H):
             rows = []
@@ -486,10 +485,10 @@ def main():
         col1_rows, col1_end = layout_col_unified(COL1_LABELS, col1_x, BTN_START, BTN_GAP)
         col3_rows, col3_end = layout_col_unified(COL3_LABELS, col3_x, BTN_START, BTN_GAP)
 
-        # blend slider: 1/3 of screen height, PLAY BLEND above slider
+        # blend slider: compact height
         play_blend_y = BTN_START
         blend_slider_y1 = play_blend_y + UNIFIED_BTN_H + BTN_GAP
-        blend_h = max(int(sh * 1.0 / 3.0), 120)
+        blend_h = max(int(sh * 0.25), 100)  # 1/4 screen height
         col2_rows, col2_end = layout_col_unified(COL2_LABELS, col2_x, blend_slider_y1 + blend_h + BTN_GAP, BTN_GAP)
 
         # Scene buttons in 2x2 grid below blend slider
@@ -764,22 +763,31 @@ def main():
         #     status_msg_timer = 3.0
 
         # ── Waveform & Spectrogram at bottom of center panel ──
-        viz_y = sh - 260  # 2x120 + padding from bottom
+        viz_y = sh - 280  # 120 + 160 (1.33x) + padding from bottom
         viz_w = CENTER_W - 20
-        viz_h = 120  # Twice as tall
+        viz_h = 120  # Waveform height
+        spec_h = int(viz_h * 1.33)  # Spectrogram 1.33x taller (fits better)
         viz_x = CENTER_X + 10
 
         if last_pcm is not None:
             # Label
             rl.draw_text(f"Last: {last_pcm_label}", viz_x, viz_y - 18, 16, rl.DARKGRAY)
-            # Draw waveform using line rendering
-            audio_viz.draw_waveform(last_pcm, viz_x, viz_y, viz_w, viz_h)
-            # Draw spectrogram using spectrodemo
-            power_norm = spectro.compute_spectrogram_from_wave(last_pcm)
-            if power_norm is not None:
-                rgba = spectro.power_to_rgba(power_norm)
-                tex = spectro.build_texture(rgba)
-                spectro.draw_spectro(tex, viz_x, viz_y + viz_h + 10, viz_w, viz_h)
+            # Draw waveform using spectrodemo
+            spectro.draw_waveform(last_pcm, viz_x, viz_y, viz_w, viz_h)
+            # Draw spectrogram using content-based cache
+            wave_hash = spectro._wave_hash(last_pcm)
+            if wave_hash in spectro._tex_cache:
+                # Reuse cached texture
+                tex = spectro._tex_cache[wave_hash]
+                spectro.draw_spectro(tex, viz_x, viz_y + viz_h + 10, viz_w, spec_h)
+            else:
+                # Generate new spectrogram
+                power_norm = spectro.compute_spectrogram_from_wave(last_pcm)
+                if power_norm is not None:
+                    rgba = spectro.power_to_rgba(power_norm)
+                    tex = spectro.build_texture(rgba)
+                    spectro._tex_cache[wave_hash] = tex
+                    spectro.draw_spectro(tex, viz_x, viz_y + viz_h + 10, viz_w, spec_h)
         else:
             rl.draw_text("Play a sound to see waveform/spectrogram", viz_x, viz_y + 20, 16, rl.LIGHTGRAY)
 
@@ -787,6 +795,7 @@ def main():
 
     player._stop()
     rl.close_audio_device()
+    spectro.clear_texture_cache()
     rl.close_window()
 
 
