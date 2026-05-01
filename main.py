@@ -37,7 +37,7 @@ from params import (
 from generator import generate_wave, generate_wave_blended, SAMPLE_RATE
 import dialogs
 import ui_components as ui
-from tag_manager import estimate_tags, save_tags, find_matching_tags
+from tag_manager import estimate_tags, save_tags, find_matching_tags, generate_novel_params
 
 SCREEN_W  = 1920
 SCREEN_H  = 1080
@@ -409,7 +409,7 @@ def main():
     tag_editor_b.set_text("")
     tag_editor_blend.set_text("")
 
-    COL1_LABELS = ["PLAY A", "A< BLEND", "A< RND", "A< B", "EXPORT A", "COPY A"]
+    COL1_LABELS = ["PLAY A", "A< BLEND", "A< RND", "A< B", "NOVEL A", "EXPORT A", "COPY A"]
     COL3_LABELS = ["PLAY B", "BLEND >B", "RND >B", "A >B", "EXPORT B", "COPY B"]
     COL2_LABELS = ["EXPORT BLEND"]
     SCENE_BTN_LABELS = ["SAVE SCENE (.bfxr)", "LOAD SCENE", "COPY SCENE", "PASTE SCENE"]
@@ -545,6 +545,13 @@ def main():
             elif label == "A< B":
                 if ui.button(bx, cy, bw, bh, label, COLOR_COPY):
                     for i in range(NUM_PARAMS): params_l[i] = params_r[i]
+                    if play_on_gen: gen.start(params_l, "A")
+            elif label == "NOVEL A":
+                if ui.button(bx, cy, bw, bh, label, COLOR_RAND):
+                    novel = generate_novel_params()
+                    for i in range(NUM_PARAMS): params_l[i] = novel[i]
+                    status_msg = "Generated novel params for A"
+                    status_msg_timer = 2.0
                     if play_on_gen: gen.start(params_l, "A")
             elif label == "EXPORT A":
                 if ui.button(bx, cy, bw, bh, label, COLOR_EXPORT):

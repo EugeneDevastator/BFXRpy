@@ -187,3 +187,60 @@ def load_tags(sample_id, params, blend_t=None):
                 _params_match(entry.get("PARAMS", ""), params)):
             return entry.get("TAGS", "")
     return ""
+
+
+def _generate_random_params():
+    """Generate random parameters within valid ranges."""
+    import random
+    params = []
+    for i, (lo, hi, _) in enumerate(PARAM_RANGES):
+        if i == 0 or i == 32:  # WaveType, WaveTypeB - integer
+            params.append(float(random.randint(int(lo), int(hi))))
+        else:
+            params.append(random.uniform(lo, hi))
+    return params
+
+
+def generate_novel_params(num_candidates=500):
+    """Generate parameters that are as far as possible from tagged latent space.
+    Returns params with minimal similarity to any tagged entry.
+    """
+    entries = _read_all_entries()
+    if not entries:
+        return _generate_random_params()
+
+    # Load all tagged parameter sets
+    db_params = []
+    for entry in entries:
+        entry_params_str = entry.get("PARAMS", "")
+        if not entry_params_str:
+            continue
+        try:
+            parts = entry_params_str.split(",")
+            entry_params = [float(p) for p in parts]
+            if len(entry_params) == NUM_PARAMS:
+                db_params.append(entry_params)
+        except (ValueError, AttributeError):
+            continue
+
+    if not db_params:
+        return _generate_random_params()
+
+    # Generate candidates and find the one with highest minimum distance to DB
+    best_params = None
+    best_min_dist = -1
+
+    for _ in range(num_candidates):
+        candidate = _generate_random_params()
+        # Compute minimum distance to any DB entry (we want to maximize this)
+        min_dist = float('inf')
+        for dp in db_params:
+            dist = _param_distance(candidate, dp)
+            if dist < min_dist:
+                min_dist = dist
+
+        if min_dist > best_min_dist:
+            best_min_dist = min_dist
+            best_params = candidate[:]
+
+    return best_params if best_params else _generate_random_params()
