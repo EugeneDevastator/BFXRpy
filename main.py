@@ -2,6 +2,8 @@
 import threading
 import os
 import wave
+import itertools
+import glob
 import numpy as np
 import pyray as rl
 
@@ -241,6 +243,28 @@ def dominant_wave_type(blend_t, wt_a, wt_b):
     return wt_a if blend_t <= 0.5 else wt_b
 
 
+EXPORT_DIR = "export"
+
+def ensure_export_dir():
+    if not os.path.isdir(EXPORT_DIR):
+        os.makedirs(EXPORT_DIR, exist_ok=True)
+
+def unique_export_path(base_name, ext):
+    ensure_export_dir()
+    pattern = os.path.join(EXPORT_DIR, f"{base_name}_*.{ext}")
+    existing = glob.glob(pattern)
+    max_n = 0
+    prefix = f"{base_name}_"
+    for f in existing:
+        name = os.path.basename(f)
+        num_part = name[len(prefix):].rsplit(".", 1)[0]
+        if num_part.isdigit():
+            n = int(num_part)
+            if n > max_n:
+                max_n = n
+    new_num = max_n + 1
+    return os.path.join(EXPORT_DIR, f"{base_name}_{new_num:04d}.{ext}")
+
 def export_wav(pcm, filepath):
     pcm_int16 = pcm.astype(np.int16)
     with wave.open(filepath, "wb") as wf:
@@ -297,6 +321,11 @@ def parse_scene_text(text, params_l, params_r):
 def export_scene_bfxr(params_l, params_r, blend_t, filepath):
     with open(filepath, "w") as f:
         f.write(params_to_text(params_l, params_r, blend_t))
+
+def export_scene_to_export(params_l, params_r, blend_t):
+    fname = unique_export_path("scene", "bfxr")
+    export_scene_bfxr(params_l, params_r, blend_t, fname)
+    return fname
 
 
 def load_scene_bfxr(filepath, params_l, params_r):
@@ -440,8 +469,8 @@ def _do_export(params):
     import time
     t0 = time.time()
     pcm = _export_fn(params)
-    fname = f"bfxr_{_export_label.lower()}.wav"
-    export_wav(pcm, os.path.join(os.getcwd(), fname))
+    fname = unique_export_path(f"bfxr_{_export_label.lower()}", "wav")
+    export_wav(pcm, fname)
     dur = time.time() - t0
     n_samples = len(pcm)
     audio_dur = n_samples / SAMPLE_RATE
@@ -525,6 +554,9 @@ def main():
     global_volume  = 1.0
 
     start_warmup(params_l)
+
+    # ensure export directory exists on startup
+    ensure_export_dir()
 
     COLOR_A    = rl.Color(40,  80, 160, 255)
     COLOR_B    = rl.Color(40, 130,  60, 255)
@@ -690,8 +722,8 @@ def main():
                     status_msg_timer = 2.0
             elif label == "SAVE SCENE (.bfxr)":
                 if draw_button(bx, cy2, bw, bh, label, COLOR_CLIP):
-                    export_scene_bfxr(params_l, params_r, blend_t, "scene.bfxr")
-                    status_msg = "Saved scene.bfxr"
+                    fname = export_scene_to_export(params_l, params_r, blend_t)
+                    status_msg = f"Saved {fname}"
                     status_msg_timer = 2.0
             elif label == "LOAD SCENE":
                 if draw_button(bx, cy2, bw, bh, label, COLOR_CLIP):
