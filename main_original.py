@@ -36,12 +36,199 @@ from params import (
 )
 from generator import generate_wave, generate_wave_blended, SAMPLE_RATE
 import dialogs
-import ui_components as ui
-from tag_manager import estimate_tags
 
 SCREEN_W  = 1920
 SCREEN_H  = 1080
+FONT_SIZE = 32
 CHUNK     = 4096
+SLIDER_FONT_SIZE = FONT_SIZE - 6
+
+_font = None
+
+def get_font():
+    return _font if _font is not None else rl.get_font_default()
+
+def measure_text_f(text, size):
+    f = get_font()
+    v = rl.measure_text_ex(f, text, size, 1)
+    return int(v.x)
+
+def draw_text_f(text, x, y, size, color):
+    rl.draw_text_ex(get_font(), text, rl.Vector2(x, y), size, 1, color)
+
+_GROUP_STARTS = set(g[1] for g in PARAM_GROUPS if g[1] > 0)
+
+
+def draw_panel(x, y, w, h, params, label):
+    rl.draw_rectangle_lines(x, y, w, h, rl.LIGHTGRAY)
+    draw_text_f(label, x + 10, y + 8, FONT_SIZE, rl.DARKGRAY)
+
+    lbl_font = SLIDER_FONT_SIZE
+    val_w    = 72
+    pad_left = x + 10
+    row_h    = (h - 50) // NUM_PARAMS
+    by       = y + 46
+
+    max_lbl_w = max(measure_text_f(PARAM_NAMES[i], lbl_font) for i in range(NUM_PARAMS))
+    lbl_gap   = 6
+    sx        = pad_left + max_lbl_w + lbl_gap
+    sw        = (x + w) - sx - val_w - 14
+
+    for i in range(NUM_PARAMS):
+        if i in _GROUP_STARTS:
+            sep_y = by + i * row_h - 2
+            rl.draw_line(pad_left, sep_y,
+                         pad_left + max_lbl_w + lbl_gap + sw + val_w + 8, sep_y,
+                         rl.Color(180, 180, 180, 255))
+
+        sy      = by + i * row_h
+        track_y = sy + row_h // 2
+
+        draw_text_f(PARAM_NAMES[i], pad_left, sy, lbl_font, rl.DARKGRAY)
+
+        bar_h  = 8
+        bar_y  = track_y - bar_h // 2
+        t      = param_to_t(i, params[i])
+
+        lo, hi, _ = PARAM_RANGES[i]
+        rl.draw_rectangle(sx, bar_y, sw, bar_h, rl.Color(200, 200, 200, 255))
+
+        if lo < 0:
+            mid_x   = sx + sw // 2
+            fill_px = int(t * sw) - sw // 2
+            if fill_px >= 0:
+                rl.draw_rectangle(mid_x, bar_y, fill_px, bar_h, rl.Color(70, 130, 200, 255))
+            else:
+                rl.draw_rectangle(mid_x + fill_px, bar_y, -fill_px, bar_h, rl.Color(200, 100, 70, 255))
+            rl.draw_line(mid_x, bar_y - 2, mid_x, bar_y + bar_h + 2, rl.DARKGRAY)
+        else:
+            filled = int(t * sw)
+            rl.draw_rectangle(sx, bar_y, filled, bar_h, rl.Color(70, 130, 200, 255))
+
+        knob_w = 6
+        knob_h = 18
+        knob_x = sx + int(t * sw) - knob_w // 2
+        rl.draw_rectangle(knob_x, bar_y - (knob_h - bar_h) // 2, knob_w, knob_h, rl.BLACK)
+
+        val_str = param_display(i, params[i])
+        draw_text_f(val_str, sx + sw + 6, sy, lbl_font, rl.DARKGRAY)
+
+    return sx, sw, by, row_h
+
+
+def handle_slider_input(mx, my, sx, sw, by, row_h, params):
+    released = False
+    for i in range(NUM_PARAMS):
+        track_y = by + i * row_h + row_h // 2
+        if abs(my - track_y) < 14 and sx <= mx <= sx + sw:
+            if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                t = (mx - sx) / sw
+                if t < 0.0: t = 0.0
+                if t > 1.0: t = 1.0
+                params[i] = t_to_param(i, t)
+            if rl.is_mouse_button_released(rl.MouseButton.MOUSE_BUTTON_LEFT):
+                released = True
+    return released
+
+
+def draw_button(x, y, w, h, label, color):
+    mx, my  = rl.get_mouse_x(), rl.get_mouse_y()
+    hovered = x <= mx <= x + w and y <= my <= y + h
+    col     = rl.color_brightness(color, 0.3) if hovered else color
+    rl.draw_rectangle(x, y, w, h, col)
+    rl.draw_rectangle_lines(x, y, w, h, rl.DARKGRAY)
+    fs = FONT_SIZE - 2
+    tw = measure_text_f(label, fs)
+    draw_text_f(label, x + (w - tw) // 2, y + (h - fs) // 2, fs, rl.RAYWHITE)
+    return hovered and rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT)
+
+
+def draw_checkbox(x, y, size, label, checked):
+    mx, my = rl.get_mouse_x(), rl.get_mouse_y()
+    hovered = x <= mx <= x + size and y <= my <= y + size
+    rl.draw_rectangle_lines(x, y, size, size, rl.DARKGRAY)
+    if checked:
+        rl.draw_rectangle(x + 4, y + 4, size - 8, size - 8, rl.Color(200, 120, 30, 255))
+    draw_text_f(label, x + size + 8, y + (size - SLIDER_FONT_SIZE) // 2, SLIDER_FONT_SIZE, rl.DARKGRAY)
+    if hovered and rl.is_mouse_button_pressed(rl.MouseButton.MOUSE_BUTTON_LEFT):
+        return not checked
+    return checked
+
+
+def draw_hslider(x, y, w, h, val, label):
+    mx, my = rl.get_mouse_x(), rl.get_mouse_y()
+    lw     = measure_text_f(label, SLIDER_FONT_SIZE)
+    sx     = x + lw + 8
+    sw     = max(w - lw - 60, 40)
+    bar_y  = y + SLIDER_FONT_SIZE // 2
+    draw_text_f(label, x, y, SLIDER_FONT_SIZE, rl.DARKGRAY)
+    filled = int(val * sw)
+    rl.draw_rectangle(sx, bar_y, sw, h, rl.Color(200, 200, 200, 255))
+    rl.draw_rectangle(sx, bar_y, filled, h, rl.Color(200, 160, 40, 255))
+    knob_w = 6
+    rl.draw_rectangle(sx + filled - knob_w // 2, bar_y - 4, knob_w, h + 8, rl.BLACK)
+    draw_text_f(f"{val:.2f}", sx + sw + 6, bar_y, SLIDER_FONT_SIZE - 4, rl.DARKGRAY)
+    if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT):
+        if abs(my - (bar_y + h // 2)) < 20 and sx <= mx <= sx + sw:
+            val = (mx - sx) / sw
+            if val < 0.0: val = 0.0
+            if val > 1.0: val = 1.0
+    return val
+
+
+def draw_blend_slider(x, y, w, h, blend_t):
+    mx, my = rl.get_mouse_x(), rl.get_mouse_y()
+
+    seg_h   = h // 3
+    total_h = seg_h * 3
+
+    COLOR_EXTRA_A = rl.Color(180, 100, 40,  180)
+    COLOR_CORE    = rl.Color(200, 160, 40,  255)
+    COLOR_EXTRA_B = rl.Color(100, 180, 40,  180)
+    COLOR_TRACK   = rl.Color(200, 200, 200, 255)
+
+    bar_w = 16
+    bar_x = x + w // 2 - bar_w // 2
+
+    rl.draw_rectangle(bar_x, y, bar_w, total_h, COLOR_TRACK)
+
+    def t_to_py(t):
+        return y + int((t + 1.0) / 3.0 * total_h)
+
+    a_py    = t_to_py(0.0)
+    b_py    = t_to_py(1.0)
+    knob_py = t_to_py(blend_t)
+
+    if blend_t < 0.0:
+        fill_y = knob_py
+        fill_h = a_py - knob_py
+        rl.draw_rectangle(bar_x, fill_y, bar_w, fill_h, COLOR_EXTRA_A)
+    elif blend_t <= 1.0:
+        fill_h = knob_py - a_py
+        rl.draw_rectangle(bar_x, a_py, bar_w, fill_h, COLOR_CORE)
+    else:
+        rl.draw_rectangle(bar_x, a_py, bar_w, b_py - a_py, COLOR_CORE)
+        rl.draw_rectangle(bar_x, b_py, bar_w, knob_py - b_py, COLOR_EXTRA_B)
+
+    rl.draw_line(bar_x - 8, a_py, bar_x + bar_w + 8, a_py, rl.Color(40, 80, 160, 255))
+    rl.draw_line(bar_x - 8, b_py, bar_x + bar_w + 8, b_py, rl.Color(40, 130, 60, 255))
+
+    lbl_fs = FONT_SIZE - 4
+    draw_text_f("A", bar_x - 24, a_py - lbl_fs // 2, lbl_fs, rl.Color(40, 80, 160, 255))
+    draw_text_f("B", bar_x - 24, b_py - lbl_fs // 2, lbl_fs, rl.Color(40, 130, 60, 255))
+
+    knob_h2 = 10
+    rl.draw_rectangle(bar_x - 6, knob_py - knob_h2 // 2, bar_w + 12, knob_h2, rl.BLACK)
+    draw_text_f(f"{blend_t:.2f}", bar_x + bar_w + 6, knob_py - lbl_fs // 2, FONT_SIZE - 12, rl.DARKGRAY)
+
+    touching = abs(mx - (bar_x + bar_w // 2)) < 24 and y <= my <= y + total_h
+    if rl.is_mouse_button_down(rl.MouseButton.MOUSE_BUTTON_LEFT) and touching:
+        blend_t = (my - y) / total_h * 3.0 - 1.0
+        if blend_t < -1.0: blend_t = -1.0
+        if blend_t >  2.0: blend_t =  2.0
+
+    released = touching and rl.is_mouse_button_released(rl.MouseButton.MOUSE_BUTTON_LEFT)
+    return blend_t, released
 
 
 def clamp_params_to_ui(params):
@@ -341,8 +528,8 @@ def start_warmup(params):
 
 def gen_btn_size(label, min_w=100, min_h=40, pad_x=24, pad_y=14, fs=None):
     if fs is None:
-        fs = ui.FONT_SIZE - 8
-    tw = ui.measure_text_f(label, fs)
+        fs = FONT_SIZE - 8
+    tw = measure_text_f(label, fs)
     th = fs
     return max(tw + pad_x, min_w), max(th + pad_y, min_h)
 
@@ -368,12 +555,10 @@ def main():
     rl.set_target_fps(60)
 
     try:
-        _font = rl.load_font_ex("Cadman_Bold.otf", ui.FONT_SIZE * 2, rl.ffi.NULL, 0)
+        _font = rl.load_font_ex("Cadman_Bold.otf", FONT_SIZE * 2, rl.ffi.NULL, 0)
         rl.set_texture_filter(_font.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
-        ui._font = _font
     except Exception:
         _font = None
-        ui._font = None
 
     params_l = make_params()
     params_r = make_params()
@@ -399,15 +584,6 @@ def main():
     COLOR_BLEND= rl.Color(180, 130,  20, 255)
     COLOR_EXPORT = rl.Color(100, 100, 160, 255)
     COLOR_CLIP   = rl.Color(80, 120, 80, 255)
-    COLOR_TAG    = rl.Color(80, 120, 160, 255)
-
-    # Text editors for parameter tags
-    tag_editor_a = ui.TextEditor()
-    tag_editor_b = ui.TextEditor()
-    tag_editor_blend = ui.TextEditor()
-    tag_editor_a.set_text("")
-    tag_editor_b.set_text("")
-    tag_editor_blend.set_text("")
 
     COL1_LABELS = ["PLAY A", "A< BLEND", "A< RND", "A< B", "EXPORT A", "COPY A"]
     COL3_LABELS = ["PLAY B", "BLEND >B", "RND >B", "A >B", "EXPORT B", "COPY B"]
@@ -498,11 +674,11 @@ def main():
         rl.begin_drawing()
         rl.clear_background(rl.Color(240, 240, 240, 255))
 
-        sx_l, sw_l, by_l, rh_l = ui.draw_panel(LEFT_X,  PANEL_Y, PANEL_W, PANEL_H, params_l, "PRESET A")
-        sx_r, sw_r, by_r, rh_r = ui.draw_panel(RIGHT_X, PANEL_Y, PANEL_W, PANEL_H, params_r, "PRESET B")
+        sx_l, sw_l, by_l, rh_l = draw_panel(LEFT_X,  PANEL_Y, PANEL_W, PANEL_H, params_l, "PRESET A")
+        sx_r, sw_r, by_r, rh_r = draw_panel(RIGHT_X, PANEL_Y, PANEL_W, PANEL_H, params_r, "PRESET B")
 
-        rel_l = ui.handle_slider_input(mx, my, sx_l, sw_l, by_l, rh_l, params_l)
-        rel_r = ui.handle_slider_input(mx, my, sx_r, sw_r, by_r, rh_r, params_r)
+        rel_l = handle_slider_input(mx, my, sx_l, sw_l, by_l, rh_l, params_l)
+        rel_r = handle_slider_input(mx, my, sx_r, sw_r, by_r, rh_r, params_r)
 
         if play_on_gen:
             if rel_l: gen.start(params_l, "A")
@@ -510,44 +686,44 @@ def main():
 
         # ── Top controls ──
         top_w = cw
-        play_on_gen   = ui.checkbox(cx, ctrl_y, 26, "Play on Change", play_on_gen)
-        global_volume = ui.hslider(cx, vol_y, top_w, 10, global_volume, "Vol")
+        play_on_gen   = draw_checkbox(cx, ctrl_y, 26, "Play on Change", play_on_gen)
+        global_volume = draw_hslider(cx, vol_y, top_w, 10, global_volume, "Vol")
         player.set_volume(global_volume)
 
         if not _warmup_done:
-            ui.draw_text_f("Warming up audio engine...", cx, status_y, ui.SLIDER_FONT_SIZE, rl.Color(0, 120, 200, 255))
+            draw_text_f("Warming up audio engine...", cx, status_y, SLIDER_FONT_SIZE, rl.Color(0, 120, 200, 255))
         elif gen.running:
-            ui.draw_text_f(f"Generating {gen.label}...", cx, status_y, ui.SLIDER_FONT_SIZE, rl.Color(180, 140, 0, 255))
+            draw_text_f(f"Generating {gen.label}...", cx, status_y, SLIDER_FONT_SIZE, rl.Color(180, 140, 0, 255))
         elif player.playing:
-            ui.draw_text_f("PLAYING...", cx, status_y, ui.SLIDER_FONT_SIZE, rl.Color(40, 130, 60, 255))
+            draw_text_f("PLAYING...", cx, status_y, SLIDER_FONT_SIZE, rl.Color(40, 130, 60, 255))
         elif status_msg:
-            ui.draw_text_f(status_msg, cx, status_y, ui.SLIDER_FONT_SIZE, rl.Color(40, 100, 180, 255))
+            draw_text_f(status_msg, cx, status_y, SLIDER_FONT_SIZE, rl.Color(40, 100, 180, 255))
         else:
-            ui.draw_text_f("---", cx, status_y, ui.SLIDER_FONT_SIZE, rl.GRAY)
+            draw_text_f("---", cx, status_y, SLIDER_FONT_SIZE, rl.GRAY)
 
         # ── Column 1: A buttons ──
         cy = BTN_START
         for label, bx, by, bw, bh in col1_rows:
             if label == "PLAY A":
-                if ui.button(bx, cy, bw, bh, label, COLOR_A):
+                if draw_button(bx, cy, bw, bh, label, COLOR_A):
                     gen.start(params_l, "A")
             elif label == "A< BLEND":
-                if ui.button(bx, cy, bw, bh, label, COLOR_XFER):
+                if draw_button(bx, cy, bw, bh, label, COLOR_XFER):
                     blended = clamp_params_to_ui(blend_params(params_l, params_r, blend_t))
                     wt_dom  = dominant_wave_type(blend_t, params_l[0], params_r[0])
                     blended[0] = wt_dom
                     for i in range(NUM_PARAMS): params_l[i] = blended[i]
                     if play_on_gen: gen.start(params_l, "A")
             elif label == "A< RND":
-                if ui.button(bx, cy, bw, bh, label, COLOR_RAND):
+                if draw_button(bx, cy, bw, bh, label, COLOR_RAND):
                     randomize_params(params_l)
                     if play_on_gen: gen.start(params_l, "A")
             elif label == "A< B":
-                if ui.button(bx, cy, bw, bh, label, COLOR_COPY):
+                if draw_button(bx, cy, bw, bh, label, COLOR_COPY):
                     for i in range(NUM_PARAMS): params_l[i] = params_r[i]
                     if play_on_gen: gen.start(params_l, "A")
             elif label == "EXPORT A":
-                if ui.button(bx, cy, bw, bh, label, COLOR_EXPORT):
+                if draw_button(bx, cy, bw, bh, label, COLOR_EXPORT):
                     p = list(params_l)
                     result = gen_start_export_with_dialog(p, "A", lambda p: generate_wave(p))
                     if result:
@@ -557,7 +733,7 @@ def main():
                         status_msg = "Export cancelled"
                         status_msg_timer = 2.0
             elif label == "COPY A":
-                if ui.button(bx, cy, bw, bh, label, COLOR_CLIP):
+                if draw_button(bx, cy, bw, bh, label, COLOR_CLIP):
                     text = params_to_text(params_l, params_l, 0.0)
                     copy_to_clipboard(text)
                     status_msg = "Copied Preset A to clipboard"
@@ -565,17 +741,17 @@ def main():
             cy += bh + BTN_GAP
 
         # ── Column 2: PLAY BLEND above slider, then slider, then other buttons ──
-        play_blend_pressed = ui.button(col2_x, play_blend_y, UNIFIED_BTN_W, UNIFIED_BTN_H, "PLAY BLEND", COLOR_BLEND)
+        play_blend_pressed = draw_button(col2_x, play_blend_y, UNIFIED_BTN_W, UNIFIED_BTN_H, "PLAY BLEND", COLOR_BLEND)
         if play_blend_pressed:
             blended_p = blend_params(params_l, params_r, blend_t)
             gen.start_blended(blended_p, params_l[0], params_r[0], blend_t, "BLEND")
 
-        blend_t, blend_released = ui.blend_slider(col2_x, blend_slider_y1, UNIFIED_BTN_W, blend_h, blend_t)
+        blend_t, blend_released = draw_blend_slider(col2_x, blend_slider_y1, UNIFIED_BTN_W, blend_h, blend_t)
 
         # Draw scene buttons in 2x2 grid
         for bx, by, bw, bh, label in scene_positions:
             if label == "SAVE SCENE (.bfxr)":
-                if ui.button(bx, by, bw, bh, label, COLOR_CLIP):
+                if draw_button(bx, by, bw, bh, label, COLOR_CLIP):
                     path = dialogs.get_save_scene_file()
                     if path:
                         text = params_to_text(params_l, params_r, blend_t)
@@ -587,7 +763,7 @@ def main():
                         status_msg = "Save cancelled"
                         status_msg_timer = 2.0
             elif label == "LOAD SCENE":
-                if ui.button(bx, by, bw, bh, label, COLOR_CLIP):
+                if draw_button(bx, by, bw, bh, label, COLOR_CLIP):
                     path = dialogs.get_load_scene_file()
                     if path:
                         with open(path, "r") as f:
@@ -600,13 +776,13 @@ def main():
                         status_msg = "Load cancelled"
                         status_msg_timer = 2.0
             elif label == "COPY SCENE":
-                if ui.button(bx, by, bw, bh, label, COLOR_CLIP):
+                if draw_button(bx, by, bw, bh, label, COLOR_CLIP):
                     text = params_to_text(params_l, params_r, blend_t)
                     copy_to_clipboard(text)
                     status_msg = "Copied scene to clipboard"
                     status_msg_timer = 2.0
             elif label == "PASTE SCENE":
-                if ui.button(bx, by, bw, bh, label, COLOR_CLIP):
+                if draw_button(bx, by, bw, bh, label, COLOR_CLIP):
                     clip = paste_from_clipboard()
                     if clip:
                         bt = parse_scene_text(clip, params_l, params_r)
@@ -626,97 +802,34 @@ def main():
         cy = BTN_START
         for label, bx, by, bw, bh in col3_rows:
             if label == "PLAY B":
-                if ui.button(bx, cy, bw, bh, label, COLOR_B):
+                if draw_button(bx, cy, bw, bh, label, COLOR_B):
                     gen.start(params_r, "B")
             elif label == "BLEND >B":
-                if ui.button(bx, cy, bw, bh, label, COLOR_XFER):
+                if draw_button(bx, cy, bw, bh, label, COLOR_XFER):
                     blended = clamp_params_to_ui(blend_params(params_l, params_r, blend_t))
                     wt_dom  = dominant_wave_type(blend_t, params_l[0], params_r[0])
                     blended[0] = wt_dom
                     for i in range(NUM_PARAMS): params_r[i] = blended[i]
                     if play_on_gen: gen.start(params_r, "B")
             elif label == "RND >B":
-                if ui.button(bx, cy, bw, bh, label, COLOR_RAND):
+                if draw_button(bx, cy, bw, bh, label, COLOR_RAND):
                     randomize_params(params_r)
                     if play_on_gen: gen.start(params_r, "B")
             elif label == "A >B":
-                if ui.button(bx, cy, bw, bh, label, COLOR_COPY):
+                if draw_button(bx, cy, bw, bh, label, COLOR_COPY):
                     for i in range(NUM_PARAMS): params_r[i] = params_l[i]
                     if play_on_gen: gen.start(params_r, "B")
             elif label == "EXPORT B":
-                if ui.button(bx, cy, bw, bh, label, COLOR_EXPORT):
+                if draw_button(bx, cy, bw, bh, label, COLOR_EXPORT):
                     p = list(params_r)
                     gen_start_export(p, "B", lambda p: generate_wave(p))
             elif label == "COPY B":
-                if ui.button(bx, cy, bw, bh, label, COLOR_CLIP):
+                if draw_button(bx, cy, bw, bh, label, COLOR_CLIP):
                     text = params_to_text(params_r, params_r, 1.0)
                     copy_to_clipboard(text)
                     status_msg = "Copied Preset B to clipboard"
                     status_msg_timer = 2.0
             cy += bh + BTN_GAP
-
-        # ── Bottom: Tag editors ──
-        tag_y = sh - 210
-        tag_w = 260
-        tag_h = 120  # 4 lines: (SLIDER_FONT_SIZE + 4) * 4 = (26 + 4) * 4 = 120
-        gap = 20
-        bottom_center_x = sw // 2
-
-        # Line 1: A and B side by side
-        line1_y = tag_y
-        line1_w = tag_w * 2 + gap
-        start_x = (sw - line1_w) // 2
-
-        ui.draw_text_f("A Tags:", start_x, line1_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
-        ui.draw_text_f("B Tags:", start_x + tag_w + gap, line1_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
-
-        tag_editor_a.update()
-        tag_editor_a.draw(start_x, line1_y, tag_w, tag_h)
-        tag_editor_b.update()
-        tag_editor_b.draw(start_x + tag_w + gap, line1_y, tag_w, tag_h)
-
-        # Buttons below A
-        btn_y = line1_y + tag_h + 4
-        btn_w = tag_w // 2 - 2
-
-        if ui.button(start_x, btn_y, btn_w, 18, "Save A", COLOR_TAG):
-            tag_a = tag_editor_a.get_text().strip()
-            status_msg = "Saved A tags: " + tag_a
-            status_msg_timer = 2.0
-        if ui.button(start_x + btn_w + 4, btn_y, btn_w, 18, "Est A", COLOR_TAG):
-            result = estimate_tags(params_l, params_l[0])
-            status_msg = "Estimate A: " + ", ".join(result)
-            status_msg_timer = 2.0
-
-        # Buttons below B
-        if ui.button(start_x + tag_w + gap, btn_y, btn_w, 18, "Save B", COLOR_TAG):
-            tag_b = tag_editor_b.get_text().strip()
-            status_msg = "Saved B tags: " + tag_b
-            status_msg_timer = 2.0
-        if ui.button(start_x + tag_w + gap + btn_w + 4, btn_y, btn_w, 18, "Est B", COLOR_TAG):
-            result = estimate_tags(params_r, params_r[0])
-            status_msg = "Estimate B: " + ", ".join(result)
-            status_msg_timer = 2.0
-
-        # Line 2: Blend centered below
-        line2_y = btn_y + 26
-        blend_x = bottom_center_x - tag_w // 2
-
-        ui.draw_text_f("Blend Tags:", blend_x, line2_y - 20, ui.SLIDER_FONT_SIZE, rl.DARKGRAY)
-        tag_editor_blend.update()
-        tag_editor_blend.draw(blend_x, line2_y, tag_w, tag_h)
-
-        btn_y2 = line2_y + tag_h + 4
-        if ui.button(blend_x, btn_y2, btn_w, 18, "Save Bl", COLOR_TAG):
-            tag_bl = tag_editor_blend.get_text().strip()
-            status_msg = "Saved Blend tags: " + tag_bl
-            status_msg_timer = 2.0
-        if ui.button(blend_x + btn_w + 4, btn_y2, btn_w, 18, "Est Bl", COLOR_TAG):
-            blended = blend_params(params_l, params_r, blend_t)
-            dom_wt = params_l[0] if blend_t <= 0.5 else params_r[0]
-            result = estimate_tags(blended, dom_wt)
-            status_msg = "Estimate Bl: " + ", ".join(result)
-            status_msg_timer = 2.0
 
         rl.end_drawing()
 
