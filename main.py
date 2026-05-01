@@ -38,6 +38,8 @@ from generator import generate_wave, generate_wave_blended, SAMPLE_RATE
 import dialogs
 import ui_components as ui
 from tag_manager import estimate_tags, save_tags, find_matching_tags, generate_novel_params
+import audio_viz
+import spectrodemo as spectro
 
 SCREEN_W  = 1920
 SCREEN_H  = 1080
@@ -167,6 +169,12 @@ def load_scene_bfxr(filepath, params_l, params_r):
 
 # ── Audio ──────────────────────────────────────────────────────────────────────
 
+# Store last played PCM for visualization
+last_pcm = None
+last_pcm_label = ""
+viz_w = 400
+viz_h = 120  # Twice as tall as before (60 -> 120)
+
 class Player:
     def __init__(self):
         self.stream  = None
@@ -176,6 +184,7 @@ class Player:
         self.volume  = 1.0
 
     def play(self, pcm):
+        global last_pcm, last_pcm_label
         self._stop()
         self.stream = rl.load_audio_stream(SAMPLE_RATE, 16, 1)
         rl.set_audio_stream_volume(self.stream, self.volume)
@@ -184,6 +193,10 @@ class Player:
         self.playing = True
         self._feed()
         rl.play_audio_stream(self.stream)
+        # Store for visualization - convert to float32 normalized
+        pcm_float = pcm.astype(np.float32) / 32767.0 if pcm.dtype == np.int16 else pcm.astype(np.float32)
+        last_pcm = pcm_float
+        last_pcm_label = getattr(self, '_label', 'A')
 
     def set_volume(self, v):
         self.volume = v
@@ -258,8 +271,8 @@ class GenJob:
         if not self.running and self.result is not None:
             r = self.result
             self.result = None
-            return r
-        return None
+            return r, self.label
+        return None, None
 
 
 # ── Export status ──────────────────────────────────────────────────────────────
@@ -439,8 +452,10 @@ def main():
 
         player.update()
 
-        pcm = gen.poll()
+        pcm, pcm_label = gen.poll()
         if pcm is not None and play_on_gen:
+            if pcm_label:
+                player._label = pcm_label
             player.play(pcm)
 
         PANEL_W, PANEL_H, PANEL_Y, LEFT_X, RIGHT_X, CENTER_X, CENTER_W = compute_layout(sw, sh)
@@ -710,15 +725,16 @@ def main():
             save_tags("B", params_r, tag_b)
             status_msg = "Saved B tags: " + tag_b
             status_msg_timer = 2.0
-        if ui.button(start_x + tag_w + tag_gap + btn_w + 8, btn_y, btn_w, btn_h, "Est B", COLOR_TAG):
-            matches = find_matching_tags(params_r, params_r[0])
-            if matches:
-                best_tags, best_score = matches[0]
-                tag_editor_b.set_text(best_tags)
-                status_msg = f"Est B (match: {best_score:.0%}): {best_tags}"
-            else:
-                status_msg = "No matches in database"
-            status_msg_timer = 3.0
+        # Est B commented out per request
+        # if ui.button(start_x + tag_w + tag_gap + btn_w + 8, btn_y, btn_w, btn_h, "Est B", COLOR_TAG):
+        #     matches = find_matching_tags(params_r, params_r[0])
+        #     if matches:
+        #         best_tags, best_score = matches[0]
+        #         tag_editor_b.set_text(best_tags)
+        #         status_msg = f"Est B (match: {best_score:.0%}): {best_tags}"
+        #     else:
+        #         status_msg = "No matches in database"
+        #     status_msg_timer = 3.0
 
         # Line 2: Blend centered below
         line2_y = btn_y + btn_h + 20
@@ -734,17 +750,38 @@ def main():
             save_tags("BLEND", blend_params(params_l, params_r, blend_t), tag_bl, blend_t)
             status_msg = "Saved Blend tags: " + tag_bl
             status_msg_timer = 2.0
-        if ui.button(blend_x + btn_w + 8, btn_y2, btn_w, btn_h, "Est Bl", COLOR_TAG):
-            blended = blend_params(params_l, params_r, blend_t)
-            dom_wt = params_l[0] if blend_t <= 0.5 else params_r[0]
-            matches = find_matching_tags(blended, dom_wt)
-            if matches:
-                best_tags, best_score = matches[0]
-                tag_editor_blend.set_text(best_tags)
-                status_msg = f"Est Bl (match: {best_score:.0%}): {best_tags}"
-            else:
-                status_msg = "No matches in database"
-            status_msg_timer = 3.0
+        # Est Bl commented out per request
+        # if ui.button(blend_x + btn_w + 8, btn_y2, btn_w, btn_h, "Est Bl", COLOR_TAG):
+        #     blended = blend_params(params_l, params_r, blend_t)
+        #     dom_wt = params_l[0] if blend_t <= 0.5 else params_r[0]
+        #     matches = find_matching_tags(blended, dom_wt)
+        #     if matches:
+        #         best_tags, best_score = matches[0]
+        #         tag_editor_blend.set_text(best_tags)
+        #         status_msg = f"Est Bl (match: {best_score:.0%}): {best_tags}"
+        #     else:
+        #         status_msg = "No matches in database"
+        #     status_msg_timer = 3.0
+
+        # ── Waveform & Spectrogram at bottom of center panel ──
+        viz_y = sh - 260  # 2x120 + padding from bottom
+        viz_w = CENTER_W - 20
+        viz_h = 120  # Twice as tall
+        viz_x = CENTER_X + 10
+
+        if last_pcm is not None:
+            # Label
+            rl.draw_text(f"Last: {last_pcm_label}", viz_x, viz_y - 18, 16, rl.DARKGRAY)
+            # Draw waveform using line rendering
+            audio_viz.draw_waveform(last_pcm, viz_x, viz_y, viz_w, viz_h)
+            # Draw spectrogram using spectrodemo
+            power_norm = spectro.compute_spectrogram_from_wave(last_pcm)
+            if power_norm is not None:
+                rgba = spectro.power_to_rgba(power_norm)
+                tex = spectro.build_texture(rgba)
+                spectro.draw_spectro(tex, viz_x, viz_y + viz_h + 10, viz_w, viz_h)
+        else:
+            rl.draw_text("Play a sound to see waveform/spectrogram", viz_x, viz_y + 20, 16, rl.LIGHTGRAY)
 
         rl.end_drawing()
 
