@@ -1,0 +1,30 @@
+# Windows build with MinGW cross-compiler
+CC = x86_64-w64-mingw32-gcc
+CFLAGS = -O2 -Wall -Wextra -I. -I./raylib/src -DPLATFORM_DESKTOP -DGRAPHICS_API_OPENGL_33
+LDFLAGS = -L./raylib/src -lraylib -lgdi32 -lwinmm -lopengl32 -lm -lpthread -ldsound -ldinput8
+
+# CLI version (no GUI)
+CLI_SRCS = main.c bfxr_params.c bfxr_generator.c bfxr_wav.c bfxr_file.c bfxr_fft.c
+CLI_OBJS = $(CLI_SRCS:.c=.o)
+CLI_TARGET = bfxr.exe
+
+# GUI version
+GUI_SRCS = gui.c bfxr_params.c bfxr_generator.c bfxr_wav.c bfxr_file.c bfxr_ui.c bfxr_vis.c bfxr_fft.c
+GUI_OBJS = $(GUI_SRCS:.c=.o)
+GUI_TARGET = bfxr_gui.exe
+
+all: $(CLI_TARGET) $(GUI_TARGET)
+
+$(CLI_TARGET): $(CLI_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+$(GUI_TARGET): $(GUI_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(CLI_OBJS) $(GUI_OBJS) $(CLI_TARGET) $(GUI_TARGET)
+
+.PHONY: all clean

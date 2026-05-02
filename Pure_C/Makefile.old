@@ -1,0 +1,29 @@
+CC = gcc
+CFLAGS = -O2 -Wall -Wextra -I. -I./raylib/src
+LDFLAGS = -L./raylib/src -lraylib -lm -lpthread -ldl -lrt -lX11
+
+# CLI version (no GUI)
+CLI_SRCS = main.c bfxr_params.c bfxr_generator.c bfxr_wav.c bfxr_file.c bfxr_fft.c
+CLI_OBJS = $(CLI_SRCS:.c=.o)
+CLI_TARGET = bfxr
+
+# GUI version
+GUI_SRCS = gui.c bfxr_params.c bfxr_generator.c bfxr_wav.c bfxr_file.c bfxr_ui.c bfxr_vis.c bfxr_fft.c
+GUI_OBJS = $(GUI_SRCS:.c=.o)
+GUI_TARGET = bfxr_gui
+
+all: $(CLI_TARGET) $(GUI_TARGET)
+
+$(CLI_TARGET): $(CLI_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+$(GUI_TARGET): $(GUI_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+clean:
+	rm -f $(CLI_OBJS) $(GUI_OBJS) $(CLI_TARGET) $(GUI_TARGET)
+
+.PHONY: all clean
