@@ -9,6 +9,7 @@
 #include "bfxr_file.h"
 #include "bfxr_ui.h"
 #include "bfxr_vis.h"
+#include "bfxr_config.h"
 #include "raylib.h"
 
 #define SCREEN_WIDTH 1200
@@ -119,6 +120,7 @@ typedef struct {
     BfxrWave pending_wave;
     int pending_play;
     const char* pending_label;
+    BfxrConfig config;
 } AppState;
 
 int handle_slider_input(int mx, int my, int sx, int sw, int by, int row_h, double params[NUM_PARAMS]) {
@@ -288,6 +290,8 @@ int main(void) {
     SetTargetFPS(60);
     InitAudioDevice();
 
+    // Set spectrogram gradient from config
+
     _font = LoadFontEx("Cadman_Bold.otf", FONT_SIZE * 2, 0, 0);
     if (_font.texture.id == 0) {
         _font = GetFontDefault();
@@ -311,7 +315,20 @@ int main(void) {
     state.pending_wave = (BfxrWave){0};
     state.pending_play = 0;
     state.pending_label = NULL;
+    // Load config
+    config_load(&state.config);
+    state.play_on_gen = state.config.autoplay;
+    state.global_volume = state.config.volume;
+
+    // Set spectrogram gradient from config
+    vis_set_gradient(state.config.grad_t, state.config.grad_r, state.config.grad_g, state.config.grad_b);
+
+    // Load last scene
+    config_load_scene(state.params_l);
+    config_load_scene(state.params_r);
+
     strcpy(state.status, "Ready");
+    vis_set_gradient(state.config.grad_t, state.config.grad_r, state.config.grad_g, state.config.grad_b);
 
     // Initialize generation job
     gen_job.running = 0;
@@ -675,6 +692,12 @@ int main(void) {
 
         EndDrawing();
     }
+
+    // Save config and last scene
+    state.config.volume = state.global_volume;
+    state.config.autoplay = state.play_on_gen;
+    config_save(&state.config);
+    config_save_scene(state.params_l);
 
     if (state.sound_loaded) UnloadSound(state.sound);
     if (state.wave_valid) bfxr_wave_free(&state.last_wave);

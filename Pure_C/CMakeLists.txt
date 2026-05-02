@@ -27,6 +27,8 @@ set(COMMON_SRCS
     bfxr_wav.c
     bfxr_file.c
     bfxr_fft.c
+    bfxr_config.c
+    ini.c
 )
 
 # CLI executable

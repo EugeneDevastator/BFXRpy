@@ -9,11 +9,17 @@
 #define N_FFT 1024
 #define OVERLAP 0.75f
 
-static const float GRADIENT[][4] = {
-    {0.0f, 0, 0, 0},
-    {0.6f, 32, 64, 128},
-    {1.0f, 255, 255, 255},
-};
+// Gradient from config - set by vis_set_gradient()
+static float grad_t[3] = {0.0f, 0.6f, 1.0f};
+static float grad_r[3] = {0, 32, 255};
+static float grad_g[3] = {0, 64, 255};
+static float grad_b[3] = {0, 128, 255};
+
+void vis_set_gradient(const float t[3], const float r[3], const float g[3], const float b[3]) {
+    for (int i = 0; i < 3; i++) {
+        grad_t[i] = t[i]; grad_r[i] = r[i]; grad_g[i] = g[i]; grad_b[i] = b[i];
+    }
+}
 
 static Texture2D spectro_tex = {0};
 static unsigned long long last_wave_hash = 0;
@@ -136,18 +142,18 @@ void vis_draw_spectrogram_full(const BfxrWave* wave, int x, int y, int w, int h)
 
                 int stop = 0;
                 for (int s = 0; s < 3; s++) {
-                    if (v >= GRADIENT[s][0]) stop = s;
+                    if (v >= grad_t[s]) stop = s;
                 }
 
                 float t = 0;
                 if (stop < 2) {
-                    t = (v - GRADIENT[stop][0]) / (GRADIENT[stop+1][0] - GRADIENT[stop][0]);
+                    t = (v - grad_t[stop]) / (grad_t[stop+1] - grad_t[stop]);
                 }
 
                 int idx = (y * SPECTRO_W + frame) * 4;
-                rgba[idx + 0] = (unsigned char)(GRADIENT[stop][1] + t * (GRADIENT[stop+1][1] - GRADIENT[stop][1]));
-                rgba[idx + 1] = (unsigned char)(GRADIENT[stop][2] + t * (GRADIENT[stop+1][2] - GRADIENT[stop][2]));
-                rgba[idx + 2] = (unsigned char)(GRADIENT[stop][3] + t * (GRADIENT[stop+1][3] - GRADIENT[stop][3]));
+                rgba[idx + 0] = (unsigned char)(grad_r[stop] + t * (grad_r[stop+1] - grad_r[stop]));
+                rgba[idx + 1] = (unsigned char)(grad_g[stop] + t * (grad_g[stop+1] - grad_g[stop]));
+                rgba[idx + 2] = (unsigned char)(grad_b[stop] + t * (grad_b[stop+1] - grad_b[stop]));
                 rgba[idx + 3] = 255;
             }
         }
