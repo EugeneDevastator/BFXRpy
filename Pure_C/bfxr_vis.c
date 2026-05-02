@@ -44,10 +44,14 @@ static void compute_spectrogram(const BfxrWave* wave, float* spectro, int spectr
     int num_frames = (n - N_FFT) / hop + 1;
     if (num_frames <= 0) return;
 
+    float sample_rate = 44100.0f;//(float)wave->sample_rate;
+    float nyquist = sample_rate * 0.5f;
+    float log_min = log2f(20.0f);
+    float log_max = log2f(nyquist);
+
     float* window = (float*)malloc(N_FFT * sizeof(float));
-    for (int i = 0; i < N_FFT; i++) {
+    for (int i = 0; i < N_FFT; i++)
         window[i] = 0.5f * (1.0f - cosf(2.0f * M_PI * i / (N_FFT - 1)));
-    }
 
     complex float* fft_buf = (complex float*)malloc(N_FFT * sizeof(complex float));
     float pmin = 1e9f, pmax = -1e9f;
@@ -56,15 +60,11 @@ static void compute_spectrogram(const BfxrWave* wave, float* spectro, int spectr
     for (int frame = 0; frame < num_frames; frame++) {
         int start = frame * hop;
         for (int i = 0; i < N_FFT; i++) {
-            if (start + i < n) {
-                fft_buf[i] = (float)wave->samples[start + i] / 32767.0f * window[i];
-            } else {
-                fft_buf[i] = 0;
-            }
+            fft_buf[i] = (start + i < n)
+                ? (float)wave->samples[start + i] / 32767.0f * window[i]
+                : 0;
         }
-
         bfxr_fft(fft_buf, N_FFT);
-
         for (int bin = 0; bin < num_bins_fft; bin++) {
             float real = crealf(fft_buf[bin]);
             float imag = cimagf(fft_buf[bin]);
@@ -79,8 +79,8 @@ static void compute_spectrogram(const BfxrWave* wave, float* spectro, int spectr
     float range = pmax - pmin + 1e-9f;
     for (int frame = 0; frame < num_frames && frame < spectro_w; frame++) {
         for (int y = 0; y < spectro_h; y++) {
-            // y=0 is bottom of display (low freq), y=spectro_h-1 is top (high freq)
-            int fft_bin = y * num_bins_fft / spectro_h;
+            float freq = powf(2.0f, log_min + (float)y / (spectro_h - 1) * (log_max - log_min));
+            int fft_bin = (int)(freq / nyquist * (num_bins_fft - 1));
             if (fft_bin < 0) fft_bin = 0;
             if (fft_bin >= num_bins_fft) fft_bin = num_bins_fft - 1;
 
@@ -136,27 +136,31 @@ void vis_draw_spectrogram_full(const BfxrWave* wave, int x, int y, int w, int h)
 
         // Texture layout: width=SPECTRO_W (time left->right), height=SPECTRO_H (freq bottom->top)
         // spectro[frame * SPECTRO_H + y] where y=0 is bottom (low freq)
-        for (int frame = 0; frame < SPECTRO_W; frame++) {
-            for (int y = 0; y < SPECTRO_H; y++) {
-                float v = spectro[frame * SPECTRO_H + y];
+		for (int frame = 0; frame < SPECTRO_W; frame++) {
+			for (int yy = 0; yy < SPECTRO_H; yy++) {
+				float v = spectro[frame * SPECTRO_H + yy];
 
-                int stop = 0;
-                for (int s = 0; s < 3; s++) {
-                    if (v >= grad_t[s]) stop = s;
-                }
+				int stop = 0;
+				for (int s = 0; s < 2; s++) {
+					if (v >= grad_t[s + 1]) stop = s + 1;
+				}
 
-                float t = 0;
-                if (stop < 2) {
-                    t = (v - grad_t[stop]) / (grad_t[stop+1] - grad_t[stop]);
-                }
+				float t = 0;
+				if (stop < 2) {
+					float denom = grad_t[stop + 1] - grad_t[stop];
+					if (denom > 1e-9f)
+						t = (v - grad_t[stop]) / denom;
+				}
 
-                int idx = (y * SPECTRO_W + frame) * 4;
-                rgba[idx + 0] = (unsigned char)(grad_r[stop] + t * (grad_r[stop+1] - grad_r[stop]));
-                rgba[idx + 1] = (unsigned char)(grad_g[stop] + t * (grad_g[stop+1] - grad_g[stop]));
-                rgba[idx + 2] = (unsigned char)(grad_b[stop] + t * (grad_b[stop+1] - grad_b[stop]));
-                rgba[idx + 3] = 255;
-            }
-        }
+				// Flip y: yy=0 (low freq) -> bottom of image (row SPECTRO_H-1)
+				int row = (SPECTRO_H - 1 - yy);
+				int idx = (row * SPECTRO_W + frame) * 4;
+				rgba[idx + 0] = (unsigned char)(grad_r[stop] + t * (grad_r[stop + 1] - grad_r[stop]));
+				rgba[idx + 1] = (unsigned char)(grad_g[stop] + t * (grad_g[stop + 1] - grad_g[stop]));
+				rgba[idx + 2] = (unsigned char)(grad_b[stop] + t * (grad_b[stop + 1] - grad_b[stop]));
+				rgba[idx + 3] = 255;
+			}
+		}
 
         Image img = {
             .data = rgba,
