@@ -328,7 +328,12 @@ int main(void) {
     config_load_scene(state.params_r);
 
     strcpy(state.status, "Ready");
-    vis_set_gradient(state.config.grad_t, state.config.grad_r, state.config.grad_g, state.config.grad_b);
+
+    // Generate initial visualizations for loaded scene
+    if (state.play_on_gen) {
+        memcpy(state.params_l, state.params_l, sizeof(double) * NUM_PARAMS);
+        start_generation(&gen_job, state.params_l, 0, "A");
+    }
 
     // Initialize generation job
     gen_job.running = 0;
@@ -406,8 +411,19 @@ int main(void) {
             }
         }
 
+        double old_blend_t = state.blend_t;
         int blend_released = 0;
         state.blend_t = draw_blend_slider(col2_x, blend_slider_y1, UNIFIED_BTN_W, blend_h, state.blend_t, &blend_released);
+
+        // Autoplay on blend slider movement if autoplay is on
+        if (state.play_on_gen && state.blend_t != old_blend_t && !gen_job.running) {
+            double blended[NUM_PARAMS];
+            params_blend(state.params_l, state.params_r, state.blend_t, blended);
+            int wt_dom = (state.blend_t <= 0.5) ? (int)state.params_l[0] : (int)state.params_r[0];
+            blended[0] = (double)wt_dom;
+            start_generation_blended(&gen_job, blended, (int)state.params_l[0], (int)state.params_r[0], state.blend_t, "BLEND");
+            snprintf(state.status, sizeof(state.status), "Generating BLEND...");
+        }
 
         // Handle button clicks
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -535,12 +551,13 @@ int main(void) {
                 }
             }
             if (mx >= gx && mx <= gx + gw && my >= gy + gh + gap && my <= gy + gh + gap + gh) {
-                if (!gen_job.running) {
-                    double blended[NUM_PARAMS];
-                    params_blend(state.params_l, state.params_r, 0.5, blended);
-                    start_generation_blended(&gen_job, blended, (int)state.params_l[0], (int)state.params_r[0], state.blend_t, "BLEND");
-                    snprintf(state.status, sizeof(state.status), "Generating BLEND...");
-                }
+                // Export blend to WAV file
+                double blended[NUM_PARAMS];
+                params_blend(state.params_l, state.params_r, state.blend_t, blended);
+                BfxrWave wave = bfxr_generate_wave_blended(blended, (int)state.params_l[0], (int)state.params_r[0], state.blend_t);
+                bfxr_wav_save("export_blend.wav", &wave);
+                bfxr_wave_free(&wave);
+                strcpy(state.status, "Exported export_blend.wav");
             }
         }
 
@@ -647,7 +664,7 @@ int main(void) {
             DrawRectangle(col2_x, BTN_START, UNIFIED_BTN_W, UNIFIED_BTN_H, btn_color);
             DrawRectangleLinesEx((Rectangle){col2_x, BTN_START, UNIFIED_BTN_W, UNIFIED_BTN_H}, 1, DARKGRAY);
             int tw = MeasureTextEx(_font, "PLAY BLEND", FONT_SIZE - 8, 1).x;
-            DrawTextEx(_font, "PLAY BLEND", (Vector2){col2_x + (UNIFIED_BTN_W - tw) / 2, BTN_START + 13}, FONT_SIZE - 8, 1, (Color){180, 130, 20, 255});
+            DrawTextEx(_font, "PLAY BLEND", (Vector2){col2_x + (UNIFIED_BTN_W - tw) / 2, BTN_START + 13}, FONT_SIZE - 8, 1, RAYWHITE);
         }
 
         // Blend slider
