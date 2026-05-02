@@ -1,3 +1,6 @@
+#include "os_util.h"
+#include <sys/stat.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +14,12 @@
 #include "bfxr_vis.h"
 #include "bfxr_config.h"
 #include "raylib.h"
+
+
+// Forward declaration for simple_hash
+unsigned long long simple_hash(const void* data, int len);
+#include "bfxr_config.h"
+
 
 #define SCREEN_WIDTH 1200
 #define SCREEN_HEIGHT 800
@@ -285,6 +294,9 @@ void load_and_play_wave(AppState* state, BfxrWave wave, const char* label) {
 }
 
 int main(void) {
+    // Create Export directory - best effort, ignore errors
+    os_mkdir("Export");
+
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "bfxrc - bfxrpy C Port");
     SetTargetFPS(60);
@@ -474,10 +486,19 @@ int main(void) {
                                 snprintf(state.status, sizeof(state.status), "Generating A...");
                             }
                             break;
-                        case 5:
-                            bfxr_wav_save("export_a.wav", &state.last_wave);
-                            strcpy(state.status, "Exported export_a.wav");
+                        case 5: {
+                            // Generate unique filename with hash
+                            unsigned long long h = simple_hash(state.last_wave.samples, state.last_wave.num_samples * 2);
+                            char export_name[256];
+                                                        time_t now = time(NULL);
+                            struct tm *t = localtime(&now);
+                            char date_str[32];
+                            strftime(date_str, sizeof(date_str), "%y_%m_%d", t);
+                            snprintf(export_name, sizeof(export_name), "Export/Sample_A_%s_%llx.wav", date_str, h);
+                            bfxr_wav_save(export_name, &state.last_wave);
+                            snprintf(state.status, sizeof(state.status), "Exported %s", export_name);
                             break;
+                        }
                     }
                 }
                 cy += UNIFIED_BTN_H + BTN_GAP;
@@ -521,10 +542,18 @@ int main(void) {
                                 snprintf(state.status, sizeof(state.status), "Generating B...");
                             }
                             break;
-                        case 4:
-                            bfxr_wav_save("export_b.wav", &state.last_wave);
-                            strcpy(state.status, "Exported export_b.wav");
+                        case 4: {
+                            unsigned long long h = simple_hash(state.last_wave.samples, state.last_wave.num_samples * 2);
+                            char export_name[256];
+                                                        time_t now = time(NULL);
+                            struct tm *t = localtime(&now);
+                            char date_str[32];
+                            strftime(date_str, sizeof(date_str), "%y_%m_%d", t);
+                            snprintf(export_name, sizeof(export_name), "Export/Sample_B_%s_%llx.wav", date_str, h);
+                            bfxr_wav_save(export_name, &state.last_wave);
+                            snprintf(state.status, sizeof(state.status), "Exported %s", export_name);
                             break;
+                        }
                     }
                 }
                 cy += UNIFIED_BTN_H + BTN_GAP;
@@ -534,7 +563,7 @@ int main(void) {
             if (mx >= col2_x && mx <= col2_x + UNIFIED_BTN_W && my >= BTN_START && my <= BTN_START + UNIFIED_BTN_H) {
                 if (!gen_job.running) {
                     double blended[NUM_PARAMS];
-                    params_blend(state.params_l, state.params_r, 0.5, blended);
+                    params_blend(state.params_l, state.params_r, state.blend_t, blended);
                     start_generation_blended(&gen_job, blended, (int)state.params_l[0], (int)state.params_r[0], state.blend_t, "BLEND");
                     snprintf(state.status, sizeof(state.status), "Generating BLEND...");
                 }
@@ -551,13 +580,20 @@ int main(void) {
                 }
             }
             if (mx >= gx && mx <= gx + gw && my >= gy + gh + gap && my <= gy + gh + gap + gh) {
-                // Export blend to WAV file
+                // Export blend to WAV file with unique name
                 double blended[NUM_PARAMS];
                 params_blend(state.params_l, state.params_r, state.blend_t, blended);
                 BfxrWave wave = bfxr_generate_wave_blended(blended, (int)state.params_l[0], (int)state.params_r[0], state.blend_t);
-                bfxr_wav_save("export_blend.wav", &wave);
+                unsigned long long h = simple_hash(wave.samples, wave.num_samples * 2);
+                char export_name[256];
+                                            time_t now = time(NULL);
+                            struct tm *t = localtime(&now);
+                            char date_str[32];
+                            strftime(date_str, sizeof(date_str), "%y_%m_%d", t);
+                            snprintf(export_name, sizeof(export_name), "Export/Sample_BLEND_%s_%llx.wav", date_str, h);
+                bfxr_wav_save(export_name, &wave);
                 bfxr_wave_free(&wave);
-                strcpy(state.status, "Exported export_blend.wav");
+                snprintf(state.status, sizeof(state.status), "Exported %s", export_name);
             }
         }
 

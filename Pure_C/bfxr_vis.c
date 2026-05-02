@@ -24,7 +24,7 @@ void vis_set_gradient(const float t[3], const float r[3], const float g[3], cons
 static Texture2D spectro_tex = {0};
 static unsigned long long last_wave_hash = 0;
 
-static unsigned long long simple_hash(const void* data, int len) {
+unsigned long long simple_hash(const void* data, int len) {
     unsigned long long hash = 5381;
     const unsigned char* p = (const unsigned char*)data;
     for (int i = 0; i < len; i++) {
