@@ -63,15 +63,17 @@ void config_save(const BfxrConfig* cfg) {
     fclose(f);
 }
 
-void config_load_scene(double params[NUM_PARAMS]) {
-    params_make_default(params);
+void config_load_scene(double params_l[NUM_PARAMS], double params_r[NUM_PARAMS], double* blend_t) {
+    params_make_default(params_l);
+    params_make_default(params_r);
+    *blend_t = 0.5;
     FILE* f = fopen(SCENE_FILE, "r");
     if (f) {
         fclose(f);
-        bfxr_load_preset(SCENE_FILE, params);
+        bfxr_load_scene(SCENE_FILE, params_l, params_r, blend_t);
     }
 }
 
-void config_save_scene(const double params[NUM_PARAMS]) {
-    bfxr_save_preset(SCENE_FILE, params);
+void config_save_scene(const double params_l[NUM_PARAMS], const double params_r[NUM_PARAMS], double blend_t) {
+    bfxr_save_scene(SCENE_FILE, params_l, params_r, blend_t);
 }

@@ -7,10 +7,18 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Platform detection
+if(WIN32 OR MINGW OR MSYS)
+    set(PLATFORM_WINDOWS TRUE)
+    add_definitions(-DPLATFORM_DESKTOP -DGRAPHICS_API_OPENGL_33)
+else()
+    set(PLATFORM_LINUX TRUE)
+endif()
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 set(COMMON_SRCS
-	os_util.c
+    os_util.c
     bfxr_params.c
     bfxr_generator.c
     bfxr_wav.c
@@ -31,26 +39,45 @@ set(GUI_SRCS
 
 add_executable(bfxr_gui ${GUI_SRCS})
 
-# --- Pre-built raylib 6.0 ---
+# Fetch and build raylib using FetchContent
 include(FetchContent)
 
 FetchContent_Declare(
-    raylib_prebuilt
-    URL https://github.com/raysan5/raylib/releases/download/6.0/raylib-6.0_win64_mingw-w64.zip
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    raylib
+    GIT_REPOSITORY https://github.com/raysan5/raylib.git
+    GIT_TAG 6.0
+    GIT_SHALLOW TRUE
 )
-FetchContent_MakeAvailable(raylib_prebuilt)
 
-set(RAYLIB_DIR ${raylib_prebuilt_SOURCE_DIR})
+# Disable raylib examples and games
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
-target_include_directories(bfxr_gui PRIVATE ${RAYLIB_DIR}/include)
+FetchContent_MakeAvailable(raylib)
 
-target_link_libraries(bfxr_gui PRIVATE
-    ${RAYLIB_DIR}/lib/libraylib.a
-    gdi32 winmm opengl32 pthread
-)
+# Link raylib to GUI executable
+target_link_libraries(bfxr_gui PRIVATE raylib)
+
+# Platform-specific libraries
+if(PLATFORM_WINDOWS)
+    target_link_libraries(bfxr_gui PRIVATE gdi32 winmm opengl32 pthread)
+else()
+    target_link_libraries(bfxr_gui PRIVATE m pthread dl rt X11)
+    target_link_libraries(bfxr PRIVATE m)
+endif()
 
 set_target_properties(bfxr bfxr_gui
     PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+# Copy DLLs on Windows (if needed)
+if(PLATFORM_WINDOWS)
+    add_custom_command(TARGET bfxr_gui POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:raylib>
+        $<TARGET_FILE_DIR:bfxr_gui>
+        DEPENDS raylib
+    )
+endif()

@@ -15,6 +15,9 @@
 #include "bfxr_config.h"
 #include "raylib.h"
 
+// For tracking parameter changes
+static double prev_params_l[NUM_PARAMS] = {0};
+static double prev_params_r[NUM_PARAMS] = {0};
 
 // Forward declaration for simple_hash
 unsigned long long simple_hash(const void* data, int len);
@@ -297,10 +300,17 @@ int main(void) {
     // Create Export directory - best effort, ignore errors
     os_mkdir("Export");
 
-    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "bfxrc - bfxrpy C Port");
-    SetTargetFPS(60);
-    InitAudioDevice();
+	SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+	InitWindow(800, 600, "bfxrc");  // dummy size first
+
+	int monitor = GetCurrentMonitor();
+	int sw = GetMonitorWidth(monitor);
+	int sh = GetMonitorHeight(monitor);
+
+	SetWindowPosition(0, 0);
+	SetWindowSize(sw, sh);
+	SetTargetFPS(60);
+	InitAudioDevice();
 
     // Set spectrogram gradient from config
 
@@ -336,8 +346,11 @@ int main(void) {
     vis_set_gradient(state.config.grad_t, state.config.grad_r, state.config.grad_g, state.config.grad_b);
 
     // Load last scene
-    config_load_scene(state.params_l);
-    config_load_scene(state.params_r);
+    config_load_scene(state.params_l, state.params_r, &state.blend_t);
+
+    // Initialize previous params for change detection
+    memcpy(prev_params_l, state.params_l, sizeof(double) * NUM_PARAMS);
+    memcpy(prev_params_r, state.params_r, sizeof(double) * NUM_PARAMS);
 
     strcpy(state.status, "Ready");
 
@@ -411,16 +424,27 @@ int main(void) {
         draw_panel(RIGHT_X, PANEL_Y, PANEL_W, PANEL_H, state.params_r, "PRESET B", &sx_r, &sw_r, &by_r, &row_h_r);
         state.rel_r = handle_slider_input(mx, my, sx_r, sw_r, by_r, row_h_r, state.params_r);
 
-        // Start generation on slider release (async, matching Python)
-        if (state.play_on_gen) {
-            if (state.rel_l && !gen_job.running) {
+        // Start generation on slider change (like blend slider)
+        if (state.play_on_gen && !gen_job.running) {
+            int l_changed = 0, r_changed = 0;
+            for (int i = 0; i < NUM_PARAMS; i++) {
+                if (state.params_l[i] != prev_params_l[i]) l_changed = 1;
+                if (state.params_r[i] != prev_params_r[i]) r_changed = 1;
+            }
+            if (l_changed) {
                 start_generation(&gen_job, state.params_l, 0, "A");
+                memcpy(prev_params_l, state.params_l, sizeof(double) * NUM_PARAMS);
                 snprintf(state.status, sizeof(state.status), "Generating A...");
             }
-            if (state.rel_r && !gen_job.running) {
+            if (r_changed) {
                 start_generation(&gen_job, state.params_r, 1, "B");
+                memcpy(prev_params_r, state.params_r, sizeof(double) * NUM_PARAMS);
                 snprintf(state.status, sizeof(state.status), "Generating B...");
             }
+        } else if (!state.play_on_gen) {
+            // Still track changes even when not playing
+            memcpy(prev_params_l, state.params_l, sizeof(double) * NUM_PARAMS);
+            memcpy(prev_params_r, state.params_r, sizeof(double) * NUM_PARAMS);
         }
 
         double old_blend_t = state.blend_t;
@@ -571,11 +595,11 @@ int main(void) {
 
             // Scene buttons
             if (mx >= gx && mx <= gx + gw && my >= gy && my <= gy + gh) {
-                bfxr_save_preset("scene.bfxr", state.params_l);
+                bfxr_save_scene("scene.bfxr", state.params_l, state.params_r, state.blend_t);
                 strcpy(state.status, "Saved scene.bfxr");
             }
             if (mx >= gx + gw + gap && mx <= gx + gw + gap + gw && my >= gy && my <= gy + gh) {
-                if (bfxr_load_preset("scene.bfxr", state.params_l) == 0) {
+                if (bfxr_load_scene("scene.bfxr", state.params_l, state.params_r, &state.blend_t) == 0) {
                     strcpy(state.status, "Loaded scene.bfxr");
                 }
             }
@@ -750,7 +774,7 @@ int main(void) {
     state.config.volume = state.global_volume;
     state.config.autoplay = state.play_on_gen;
     config_save(&state.config);
-    config_save_scene(state.params_l);
+    config_save_scene(state.params_l, state.params_r, state.blend_t);
 
     if (state.sound_loaded) UnloadSound(state.sound);
     if (state.wave_valid) bfxr_wave_free(&state.last_wave);
